@@ -119,6 +119,10 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_yaml", "message": err.Error()})
 		return
 	}
+	if config.PluginsDisabledByPolicy() && pluginConfigRequestsEnable(&cfg) {
+		rejectDisabledPluginCapability(c)
+		return
+	}
 	// Validate config using LoadConfigOptional with optional=false to enforce parsing
 	tmpDir := filepath.Dir(h.configFilePath)
 	tmpFile, err := os.CreateTemp(tmpDir, "config-validate-*.yaml")
@@ -160,6 +164,21 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 	}
 	h.cfg = newCfg
 	c.JSON(http.StatusOK, gin.H{"ok": true, "changed": []string{"config"}})
+}
+
+func pluginConfigRequestsEnable(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if cfg.Plugins.Enabled {
+		return true
+	}
+	for _, item := range cfg.Plugins.Configs {
+		if item.Enabled != nil && *item.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // GetConfigYAML returns the raw config.yaml file bytes without re-encoding.

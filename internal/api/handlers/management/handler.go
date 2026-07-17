@@ -160,6 +160,17 @@ func (h *Handler) SetConfigReloadHook(hook func(context.Context, *config.Config)
 	h.mu.Unlock()
 }
 
+func rejectDisabledPluginCapability(c *gin.Context) bool {
+	if !config.PluginsDisabledByPolicy() {
+		return false
+	}
+	c.JSON(http.StatusForbidden, gin.H{
+		"error":   "plugin_capability_disabled",
+		"message": "plugin capability is disabled by server policy",
+	})
+	return true
+}
+
 // reloadSnapshotConfigLocked clones the runtime config and assigns a reload generation.
 // Callers must hold h.mu.
 func (h *Handler) reloadSnapshotConfigLocked() configReloadSnapshot {
