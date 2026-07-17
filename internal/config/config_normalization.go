@@ -1,9 +1,12 @@
 package config
 
 import (
+	"os"
+	"strconv"
 	"strings"
 
 	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
+	"gopkg.in/yaml.v3"
 )
 
 // NormalizePluginsConfig applies default plugin configuration values.
@@ -29,6 +32,39 @@ func (cfg *Config) NormalizePluginsConfig() {
 	cfg.Plugins.StoreAuth = sdkpluginstore.NormalizeAuthConfigs(cfg.Plugins.StoreAuth)
 	if cfg.Plugins.Configs == nil {
 		cfg.Plugins.Configs = map[string]PluginInstanceConfig{}
+	}
+	if PluginsDisabledByPolicy() {
+		cfg.Plugins.Enabled = false
+		for id, item := range cfg.Plugins.Configs {
+			disabled := false
+			item.Enabled = &disabled
+			setPluginRawEnabled(&item.Raw, false)
+			cfg.Plugins.Configs[id] = item
+		}
+	}
+}
+
+// PluginsDisabledByPolicy reports whether the process-wide plugin lockdown is enabled.
+func PluginsDisabledByPolicy() bool {
+	raw := strings.TrimSpace(os.Getenv("CLIPROXY_DISABLE_PLUGINS"))
+	disabled, err := strconv.ParseBool(raw)
+	return err == nil && disabled
+}
+
+func setPluginRawEnabled(node *yaml.Node, enabled bool) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i] == nil || node.Content[i].Value != "enabled" {
+			continue
+		}
+		node.Content[i+1] = &yaml.Node{
+			Kind:  yaml.ScalarNode,
+			Tag:   "!!bool",
+			Value: strconv.FormatBool(enabled),
+		}
+		return
 	}
 }
 
