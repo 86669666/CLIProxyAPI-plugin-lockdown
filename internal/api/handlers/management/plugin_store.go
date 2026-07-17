@@ -130,6 +130,9 @@ type sourcedPlugin struct {
 }
 
 func (h *Handler) ListPluginStore(c *gin.Context) {
+	if rejectDisabledPluginCapability(c) {
+		return
+	}
 	pluginsEnabled, pluginsDir, proxyURL, sourceConfigs, storeAuth, configs, host := h.pluginStoreSnapshot()
 	resolvedPluginsDir, errResolvePluginsDir := config.ResolvePluginsDir(pluginsDir)
 	if errResolvePluginsDir != nil {
@@ -222,6 +225,9 @@ func (h *Handler) ListPluginStore(c *gin.Context) {
 }
 
 func (h *Handler) InstallPluginFromStore(c *gin.Context) {
+	if rejectDisabledPluginCapability(c) {
+		return
+	}
 	h.installPluginFromStore(c, runtime.GOOS, runtime.GOARCH)
 }
 
