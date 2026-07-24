@@ -566,16 +566,37 @@ func (s *Server) setupRoutes() {
 		v1beta.GET("/models/*action", s.geminiGetHandler(geminiHandlers))
 	}
 
-	// Root endpoint
+	// Serve a deliberately generic landing page at the public root. Keep product,
+	// protocol, and route details out of unauthenticated discovery responses.
 	s.engine.GET("/", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "CLI Proxy API Server",
-			"endpoints": []string{
-				"POST /v1/chat/completions",
-				"POST /v1/completions",
-				"GET /v1/models",
-			},
-		})
+		for _, headerName := range []string{
+			"Access-Control-Allow-Origin",
+			"Access-Control-Allow-Methods",
+			"Access-Control-Allow-Headers",
+			"Access-Control-Expose-Headers",
+		} {
+			c.Header(headerName, "")
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Welcome</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #0f172a; color: #e2e8f0; }
+    main { text-align: center; padding: 2rem; }
+    h1 { margin: 0; font-size: clamp(2rem, 8vw, 4rem); }
+  </style>
+</head>
+<body><main><h1>Welcome</h1></main></body>
+</html>`))
 	})
 
 	// OAuth callback endpoints (reuse main server port)

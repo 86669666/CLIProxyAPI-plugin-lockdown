@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -90,5 +91,41 @@ func TestPutConfigYAMLAllowsUnrelatedDisabledConfigUnderPolicy(t *testing.T) {
 	h.PutConfigYAML(c)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestPutConfigYAMLValidationTempFileUsesSystemTempDir(t *testing.T) {
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	validationTempDir := filepath.Join(t.TempDir(), "validation-temp")
+	if err := os.MkdirAll(validationTempDir, 0o700); err != nil {
+		t.Fatalf("create validation temp dir: %v", err)
+	}
+	t.Setenv("TMPDIR", validationTempDir)
+
+	configPath := writeTestConfigFile(t)
+	h := &Handler{cfg: &config.Config{}, configFilePath: configPath}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPut, "/v0/management/config.yaml", strings.NewReader("debug: true\nplugins:\n  enabled: false\n"))
+	h.PutConfigYAML(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	entries, err := os.ReadDir(filepath.Dir(configPath))
+	if err != nil {
+		t.Fatalf("read config dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "config-validate-") || strings.HasPrefix(entry.Name(), "cliproxyapi-config-validate-") {
+			t.Fatalf("validation temp file was created beside config: %s", entry.Name())
+		}
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read updated config: %v", err)
+	}
+	if !strings.Contains(string(data), "debug: true") {
+		t.Fatalf("config was not updated: %q", data)
 	}
 }

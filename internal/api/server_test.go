@@ -167,6 +167,55 @@ func TestHealthz(t *testing.T) {
 	})
 }
 
+func TestRootUsesGenericLandingPage(t *testing.T) {
+	server := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if contentType := rr.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/html") {
+		t.Fatalf("Content-Type = %q, want text/html", contentType)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Welcome") {
+		t.Fatalf("generic landing content missing: %q", body)
+	}
+	for _, forbidden := range []string{
+		"CLI Proxy API Server",
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/models",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("root response exposes %q", forbidden)
+		}
+	}
+	for _, headerName := range []string{
+		"Access-Control-Allow-Origin",
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Headers",
+		"Access-Control-Expose-Headers",
+	} {
+		if value := rr.Header().Get(headerName); value != "" {
+			t.Fatalf("%s = %q, want absent", headerName, value)
+		}
+	}
+	for headerName, want := range map[string]string{
+		"Cache-Control":           "no-store",
+		"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+		"Referrer-Policy":         "no-referrer",
+		"X-Content-Type-Options":  "nosniff",
+		"X-Frame-Options":         "DENY",
+	} {
+		if got := rr.Header().Get(headerName); got != want {
+			t.Fatalf("%s = %q, want %q", headerName, got, want)
+		}
+	}
+}
+
 func TestCodexAlphaSearchForwardsRequest(t *testing.T) {
 	server := newTestServer(t)
 	executor := &codexSearchCaptureExecutor{}
