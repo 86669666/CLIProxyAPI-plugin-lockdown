@@ -1,295 +1,418 @@
-# CLI 代理 API
+# CLIProxyAPI Plugin Lockdown
 
 [English](README.md) | 中文 | [日本語](README_JA.md)
 
-一个为 CLI 提供 OpenAI/Gemini/Claude/Codex/Grok 兼容 API 接口的代理服务器。
-
-您可以通过任何与 OpenAI（包括 Responses）、Gemini（包括 Interactions）或 Claude 兼容的客户端或 SDK，以本地方式或多 CLI 账户访问以下提供商。
-
-<table>
-<tbody>
-    <tr>
-        <th align="center" width="100">提供商</th>
-        <th align="center">说明</th>
-    </tr>
-    <tr>
-        <td align="center"><a href="https://www.kimi.com/code/?aff=cliproxyapi"><img src="./assets/logo/kimi.svg" alt="Kimi" width="28" height="28" /></a></td>
-        <td>Kimi 系列模型（Kimi K2.7 Code、Kimi K2.6 等）。<a href="https://platform.kimi.com/docs/guide/kimi-k2-7-code-quickstart">Kimi K2.7 Code</a> 是一款面向编码与复杂软件工程任务的开源智能体模型，在真实世界的长周期任务中实现了更高的端到端成功率。与 K2.6 相比，其思考 Token 用量约减少 30%。CLIProxyAPI 支持通过 OAuth 或兼容 API 接入 Kimi。立即体验 <a href="https://www.kimi.com/code/?aff=cliproxyapi">Kimi Code 订阅</a>，或前往 <a href="https://platform.kimi.com/?aff=cliproxyapi">Kimi 开放平台</a> 获取 API Key。感谢 Kimi 对开源社区的贡献！</td>
-    </tr>
-    <tr>
-        <td align="center"><a href="https://platform.openai.com/docs/guide/gpt-5.6"><img src="./assets/logo/openai.svg" alt="OpenAI" width="28" height="28" /></a></td>
-        <td>OpenAI GPT 系列模型（GPT 5.6、GPT 5.5 等）。GPT-5.6 为复杂生产工作流树立了新的质量与效率基线。GPT-5.6 尤其节省 token，并提升了前端审美表现，包括布局、视觉层级与设计判断力。</td>
-    </tr>
-    <tr>
-        <td align="center"><a href="https://www.anthropic.com/claude"><img src="./assets/logo/claude.svg" alt="Anthropic" width="28" height="28" /></a></td>
-        <td>Anthropic Claude 系列模型（Claude Fable、Claude Opus、Claude Sonnet 等）。Claude Fable 5 是 Anthropic 公开发布中能力最强的模型，专为最严苛的推理与长周期智能体任务打造。</td>
-    </tr>
-    <tr>
-        <td align="center"><a href="https://antigravity.google/"><img src="./assets/logo/antigravity.svg" alt="Antigravity" width="28" height="28" /></a></td>
-        <td>Google Gemini 系列模型（Gemini 3.5 Flash、Gemini 3.1 Pro 等）。Gemini 3.5 Flash 提供面向真实世界任务优化的持续前沿级智能，速度更快、成本更低。面向智能体时代设计，擅长子智能体部署、多步骤工作流以及大规模长周期任务。该模型尤其适合包含复杂编码循环与迭代的快速智能体回路。</td>
-    </tr>
-    <tr>
-        <td align="center"><a href="https://x.ai/grok"><img src="./assets/logo/xai.svg" alt="xAI" width="28" height="28" /></a></td>
-        <td>xAI Grok 系列模型（Grok 4.5、Grok Composer 2.5 Fast 等）。Grok 4.5 是 SpaceXAI 面向编程、智能体任务与知识工作打造的前沿模型。它在 SpaceXAI 位于孟菲斯的数据中心训练，并使用了覆盖科学、工程与数学的新数据集。</td>
-    </tr>
-</tbody>
-</table>
-
-## 赞助商
-
-[![https://www.packyapi.com/register?aff=cliproxyapi](./assets/packycode-cn.png)](https://www.packyapi.com/register?aff=cliproxyapi)
-
-感谢 PackyCode 对本项目的赞助！
-
-PackyCode 是一家可靠高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种服务的中转。
-
-PackyCode 为本软件用户提供了特别优惠：使用<a href="https://www.packyapi.com/register?aff=cliproxyapi" target="_blank">此链接</a>注册，并在充值时输入 "cliproxyapi" 优惠码即可享受九折优惠。
-
----
-
-<table>
-<tbody>
-<tr>
-<td width="180"><a href="https://www.aicodemirror.com/register?invitecode=TJNAIF"><img src="./assets/aicodemirror.png" alt="AICodeMirror" width="150"></a></td>
-<td>感谢 AICodeMirror 赞助了本项目！AICodeMirror 提供 Claude Code / Codex / Gemini 官方高稳定中转服务，支持企业级高并发、极速开票、7×24 专属技术支持。 Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更有折上折！AICodeMirror 为 CLIProxyAPI 的用户提供了特别福利，通过<a href="https://www.aicodemirror.com/register?invitecode=TJNAIF" target="_blank">此链接</a>注册的用户，可享受首充8折，企业客户最高可享 7.5 折！</td>
-</tr>
-<tr>
-<td width="180"><a href="https://shop.bmoplus.com/?utm_source=github"><img src="./assets/bmoplus.png" alt="BmoPlus" width="150"></a></td>
-<td>感谢 BmoPlus 赞助了本项目！BmoPlus 是一家专为AI订阅重度用户打造的可靠 AI 账号代充服务商，提供稳定的 ChatGPT Plus / ChatGPT Pro(全程质保) / Claude Pro / Super Grok / Gemini Pro 的官方代充&成品账号。 通过<a href="https://shop.bmoplus.com/?utm_source=github" target="_blank">BmoPlus AI成品号专卖/代充</a>注册下单的用户，可享GPT <b>官网订阅一折</b> 的震撼价格！</td>
-</tr>
-<tr>
-<td width="180"><a href="https://visioncoder.cn/"><img src="./assets/visioncoder.png" alt="VisionCoder" width="150"></a></td>
-<td>感谢 VisionCoder 对本项目的支持。<a href="https://visioncoder.cn/">VisionCoder 开发平台</a> 是一个可靠高效的 API 中继服务提供商，提供 Claude Code、Codex、Gemini 等主流 AI 模型，帮助开发者和团队更轻松地集成 AI 功能，提升工作效率。此外，VisionCoder 还提供 <b>Claude Max 200 与 GPT Pro 200 高级成品号</b>的独家售卖渠道，助力体验全网顶配 AI 的算力与体验。</td>
-</tr>
-<tr>
-<td width="180"><a href="https://apikey.fun/register?aff=CLIProxyAPI"><img src="./assets/apikey.png" alt="APIKEY.FUN" width="150"></a></td>
-<td>感谢 APIKEY.FUN 赞助本项目！APIKEY.FUN 是一家专业的企业级 AI 中转站，致力于为企业和个人开发者提供稳定、高效、低成本的 AI 模型 API 接入服务。平台支持 Claude、OpenAI、Gemini 等主流热门模型，价格低至官方原价的 7%。通过本项目<a href="https://apikey.fun/register?aff=CLIProxyAPI">专属链接</a>注册，还可享受最高 <b>充值永久 95 折</b> 专属优惠。</td>
-</tr>
-<tr>
-<td width="180"><a href="https://runapi.co/register?aff=FivD"><img src="./assets/runapi.png" alt="RunAPI" width="150"></a></td>
-<td>RunAPI 是高效稳定的API OpenRouter平替平台，一个 API Key 即可访问 OpenAI、Claude、Gemini、DeepSeek、Grok 等 150+ 主流模型，低至 1 折，极其稳定，可以无缝兼容 Claude Code、OpenClaw 等工具。RunAPI 为 CPA的用户提供专属福利：<a href="https://runapi.co/register?aff=FivD">注册</a>联系管理员即可领取￥7的免费额度</td>
-</tr>
-<tr>
-<td width="180"><a href="https://catapi.ai/sign-up"><img src="./assets/catapi.png" alt="CatAPI" width="150"></a></td>
-<td>Cat API 是一家面向个人开发者与团队的 AI 大模型聚合平台，致力于将主流大模型能力整合到一个简单、稳定、易用的入口中。平台提供完全兼容 OpenAI、Claude、Gemini 的 API，可无缝接入 Claude Code、Cursor、Windsurf、Cline、Roo Code、Continue、Codex、Trae 等主流 AI IDE 与编程工具，并主打 CN2 高速线路，为用户带来低延迟、高稳定的访问体验。<a href="https://catapi.ai/sign-up">注册</a>即可领取 1$ 的免费额度。</td>
-</tr>
-<tr>
-<td width="180"><a href="https://t.me/CyberWlD/218"><img src="./assets/cyberpay.jpg" alt="CyberPay" width="150"></a></td>
-<td>赛博支付（CyberPay）成立于2021年。我们致力于为AI从业者商家提供稳定、高效、安全的支付结算解决方案。与我们合作即可使您的网站平台解决用户支付宝/微信收款问题。承接售卖GPT 、Gemini、Claude、Codex账号与中转站等各类业务合作，解决各位商家收款困难痛点。<a href="https://t.me/CyberWlD/218">联系我们</a>开启您的致富通道。</td>
-</tr>
-<tr>
-<td width="180"><a href="https://console.claudeapi.com/agent/register/pJq9T52Fpugrhpgo"><img src="./assets/claudeapi.png" alt="ClaudeAPI" width="150"></a></td>
-<td>感谢 <a href="https://console.claudeapi.com/agent/register/pJq9T52Fpugrhpgo">Claude API</a> 赞助本项目！Claude API 是专注 Claude 模型的官方渠道 API 服务商，基于 Anthropic 官方 Key 与 AWS Bedrock 官方渠道，提供稳定的 Claude Code 与 Agent 应用接入体验，支持 Claude 全系列模型，保留 Tool Use、长上下文等官方能力。服务非逆向、非降智，适合 Claude Code 深度用户、Agent 工程师与企业技术团队使用。通过<a href="https://console.claudeapi.com/agent/register/pJq9T52Fpugrhpgo">专属链接</a>注册后联系客服，可领取免费测试额度，并支持开票和团队对接。</td>
-</tr>
-<tr>
-<td width="180"><a href="https://code0.ai/agent/register/slxVMR3uVBoRgNBf"><img src="./assets/code0.png" alt="code0" width="150"></a></td>
-<td>感谢 <a href="https://code0.ai/agent/register/slxVMR3uVBoRgNBf">Code0</a> 赞助本项目！code0.ai 是面向开发者与技术团队的 AI 编程工作台，聚合 Claude Code、Codex 等主流 Agent 编程能力，支持代码生成、项目理解、调试修复、代码审查与文档生成等常见研发场景。适合独立开发者、Agent 工程师、开源项目维护者和企业研发团队使用，支持开票和团队对接。通过<a href="https://code0.ai/agent/register/slxVMR3uVBoRgNBf">专属链接</a>注册后联系客服，可领取免费测试额度，体验更高效的 AI 编程工作流。</td>
-</tr>
-<tr>
-<td width="180"><a href="https://api.fenno.ai/register?redirect=/purchase?tab=subscription%26group=16&amp;aff=DQFAMNB6CBLY"><img src="./assets/fennoai.png" alt="FennoAI" width="150"></a></td>
-<td>感谢 <a href="https://api.fenno.ai/register?redirect=/purchase?tab=subscription%26group=16&amp;aff=DQFAMNB6CBLY">Fenno.ai</a> 赞助本项目！Fenno.ai 是一家稳定、高效的API 中转服务商，目前主要提供 Codex 中转服务，兼容OpenAI 及 Anthropic 协议，可灵活接入 Codex、Claude Code、OpenCode等主流编程工具，可稳定支撑千亿Token/日的企业级调用需求，支持国内及海外主体公对公结算、开票。Fenno.ai 为 CLIProxyAPI 的用户提供了专属福利：通过<a href="https://api.fenno.ai/register?redirect=/purchase?tab=subscription%26group=16&amp;aff=DQFAMNB6CBLY">此链接</a>即可订阅<b>9.9 元/150刀额度</b>的超值Coding Plan，邀请好友最高可享20%奖励，多邀多得！</td>
-</tr>
-<tr>
-<td width="180"><a href="https://s.qiniu.com/7zUJri"><img src="./assets/qiniucloud.png" alt="七牛云AI" width="150"></a></td>
-<td>感谢 <a href="https://s.qiniu.com/7zUJri">七牛云AI</a> 赞助本项目！七牛云AI 是七牛云(02567.HK)旗下企业级大模型MaaS平台，一站式调用全球 150+ 主流模型，兼容全球主流模型厂商协议，覆盖文本、图像、音频、视频、文件处理等全模态处理能力，服务超过 169 万企业及开发者用户。专属福利：企业用户免费领 <b>1200万 Token</b>，邀请好友最高得百亿 Token。</td>
-</tr>
-<tr>
-<td width="180"><a href="https://cubence.com/signup?code=CLIPROXYAPI&source=cpa"><img src="./assets/cubence.png" alt="Cubence" width="150"></a></td>
-<td>感谢 Cubence 对本项目的赞助！Cubence 是一家可靠高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种服务的中转。Cubence 为本软件用户提供了特别优惠：使用<a href="https://cubence.com/signup?code=CLIPROXYAPI&source=cpa">此链接</a>注册，并在充值时输入 "CLIPROXYAPI" 优惠码即可享受九折优惠。</td>
-</tr>
-<tr>
-<td width="180"><a href="https://www.fastaitoken.com/"><img src="./assets/fastaitoken.png" alt="FastAIToken" width="150"></a></td>
-<td>感谢 <a href="https://www.fastaitoken.com/">FastAIToken</a> 对本项目的赞助！ FastAIToken 是面向开发者的 AI API 聚合平台，追求极速、稳定。支持 OpenAI、Claude、Gemini 等主流大模型，充值 1:1，1 元 = 1 美元 API 额度，让开发者以更低成本、更便捷地使用全球领先的大模型服务，QQ服务群1054566214。<br/>平台提供多种渠道自由选择：超级低价的0.02x OpenAI 福利分组（限时）、低至 0.25x OpenAI 分组、0.7x Claude 95%固定缓存、1.2x Claude Max 渠道；同时提供公开状态页，实时展示各分组的可用率、延迟及运行状态，服务透明可靠，并提供 7×24 小时真人技术支持（非机器人），快速响应开发者需求。针对企业用户可以构建SLA专线号池，包稳定，可签合同开票专人维护。</td>
-</tr>
-</tbody>
-</table>
+一个基于 CLIProxyAPI 的**非官方安全加固 fork**，重点为不需要插件能力的部署提供进程级插件锁定策略，并降低未认证根路径暴露的产品指纹。
 
+本 fork 保留上游的 OpenAI、Gemini、Claude、Codex 等兼容 API、OAuth、多账户与轮询负载均衡能力。本文不对具体模型、订阅服务或第三方中转服务作推荐。
 
-## 功能特性
+> [!IMPORTANT]
+> 这不是 CLIProxyAPI 官方发行版，也不代表上游项目维护者。问题排查时请先说明正在使用本 fork，并附上基线和提交信息。
 
-- 为 CLI 模型提供 OpenAI/Gemini/Claude/Codex/Grok 兼容的 API 端点
-- 新增 OpenAI Codex（GPT 系列）支持（OAuth 登录）
-- 新增 Claude Code 支持（OAuth 登录）
-- 新增 Grok Build 支持（OAuth 登录）
-- 支持流式、非流式响应，以及受支持场景下的 WebSocket 响应
-- 函数调用/工具支持
-- 多模态输入（文本、图片）
-- 多账户支持与轮询负载均衡（Gemini、OpenAI、Claude、Grok）
-- 简单的 CLI 身份验证流程（Gemini、OpenAI、Claude、Grok）
-- 支持 Gemini AIStudio API 密钥
-- 支持 AI Studio Build 多账户轮询
-- 支持 Claude Code 多账户轮询
-- 支持 OpenAI Codex 多账户轮询
-- 支持 Grok Build 多账户轮询
-- 通过配置接入上游 OpenAI 兼容提供商（例如 OpenRouter）
-- 可复用的 Go SDK（见 `docs/sdk-usage_CN.md`）
+## 目录
 
-## 新手入门
+- [版本与来源](#版本与来源)
+- [安全目标](#安全目标)
+- [插件锁定策略](#插件锁定策略)
+- [接口行为](#接口行为)
+- [根路径与安全响应头](#根路径与安全响应头)
+- [安全边界](#安全边界)
+- [源码构建](#源码构建)
+- [本地运行](#本地运行)
+- [Docker 本地构建与运行](#docker-本地构建与运行)
+- [Compose 风险](#compose-风险)
+- [健康与策略验证](#健康与策略验证)
+- [配置验证临时文件](#配置验证临时文件)
+- [上游同步](#上游同步)
+- [文档与开发](#文档与开发)
+- [许可证与归属](#许可证与归属)
 
-CLIProxyAPI 用户手册： [https://help.router-for.me/](https://help.router-for.me/cn/)
+## 版本与来源
 
-## 管理 API 文档
+| 项目 | 值 |
+| --- | --- |
+| 上游项目 | [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) |
+| 上游基线 | `v7.2.80` |
+| 基线提交 | `09da52ad509e2c18e7b9540db3b98c2214c280aa` |
+| 插件锁定提交 | `c8b16d049a9d5e546ebc2e6267de8970c82aeca3` |
+| 根路径伪装与临时文件提交 | `c20f6e4b5a2b012635464077c50f2eb82ce0e0e8` |
+| 许可证 | MIT |
 
-请参见 [MANAGEMENT_API_CN.md](https://help.router-for.me/cn/management/api)
+两项 fork 提交的职责如下：
 
-## 使用量统计
+- `c8b16d04`：增加 `CLIPROXY_DISABLE_PLUGINS` 进程策略，标准 CLI 启动路径中规范化插件配置，并限制插件商店和插件变更接口。
+- `c20f6e4b`：将 `GET /` 改为通用 Welcome HTML，增加安全响应头，并让管理端配置验证临时文件使用系统临时目录。
 
-自v6.10.0版本以后，CLIProxyAPI及 [CPAMC](https://github.com/router-for-me/Cli-Proxy-API-Management-Center) 项目不再预置数据统计功能，如果有数据统计需求的请使用以下项目：
+## 安全目标
 
-### [CPA Usage Keeper](https://github.com/Willxup/cpa-usage-keeper)
+本 fork 适合以下场景：
 
-独立的 CLIProxyAPI 使用量持久化与可视化服务，定期同步 CLIProxyAPI 数据，存储到 SQLite，提供聚合 API，并内置使用量分析与统计仪表盘。
+- 部署只需要核心代理、OAuth、兼容 API 和多账户调度能力。
+- 运维策略要求插件在进程启动时即被强制关闭。
+- 管理端仍需查看现存插件状态、读取配置并删除遗留插件。
+- 未认证访问根路径时，不希望直接返回产品名称和 API 路由清单。
 
-### [CPA-Manager-Plus](https://github.com/seakee/CPA-Manager-Plus)
+它提供的是**纵深防御和误配置防护**，不是完整沙箱，也不是对所有扩展路径的形式化安全证明。
 
-面向 CLIProxyAPI 的完整管理中心，提供请求级监控和费用预估。CPA-Manager 可按账号、模型、渠道、延迟、状态和 token 用量追踪采集到的请求；支持可编辑模型价格与一键同步 LiteLLM 价格来估算费用；用 SQLite 持久化事件；并提供面向 Codex 账号池的批量巡检、配额识别、异常账号定位、清理建议与一键执行能力，适合多账号池的日常运维管理。
+## 插件锁定策略
 
-## SDK 文档
+### 必须在进程启动前注入
 
-- 使用文档：[docs/sdk-usage_CN.md](docs/sdk-usage_CN.md)
-- 高级（执行器与翻译器）：[docs/sdk-advanced_CN.md](docs/sdk-advanced_CN.md)
-- 认证: [docs/sdk-access_CN.md](docs/sdk-access_CN.md)
-- 凭据加载/更新: [docs/sdk-watcher_CN.md](docs/sdk-watcher_CN.md)
-- 自定义 Provider 示例：`examples/custom-provider`
+安全启动必须让真实进程环境在程序执行前包含：
 
-## 贡献
+```bash
+export CLIPROXY_DISABLE_PLUGINS=true
+./cli-proxy-api --config ./config.yaml
+```
 
-欢迎贡献！请随时提交 Pull Request。
+也可以由进程管理器直接注入：
 
-1. Fork 仓库
-2. 创建您的功能分支（`git checkout -b feature/amazing-feature`）
-3. 提交您的更改（`git commit -m 'Add some amazing feature'`）
-4. 推送到分支（`git push origin feature/amazing-feature`）
-5. 打开 Pull Request
+- systemd 的 `Environment=` 或 `EnvironmentFile=`。
+- Docker 的 `-e`、`--env-file` 或 Compose `environment`。
+- Kubernetes、Nomad 或其他编排器的容器环境变量。
+- CI/CD、启动脚本或主机服务管理器在 `exec` 前导出的环境。
 
-## 谁与我们在一起？
+> [!WARNING]
+> **不要把“仅在工作目录 `.env` 中写入 `CLIPROXY_DISABLE_PLUGINS=true`”当作安全启动方式。**
+>
+> 标准服务器入口会先读取配置并执行插件 bootstrap、注册插件命令行标志，然后才加载工作目录 `.env`。因此 `.env` 中的该变量到达得太晚，不能保证 bootstrap 阶段已经受锁定策略保护。
 
-这些项目基于 CLIProxyAPI:
+如果希望使用环境文件，请在启动程序之前由 shell、systemd、Docker 或编排器加载它。例如：
 
-### [vibeproxy](https://github.com/automazeio/vibeproxy)
+```bash
+set -a
+. /secure/path/cliproxy.env
+set +a
+exec ./cli-proxy-api --config ./config.yaml
+```
 
-一个原生 macOS 菜单栏应用，让您可以使用 Claude Code & ChatGPT 订阅服务和 AI 编程工具，无需 API 密钥。
+### 标准 CLI 路径中的行为
 
-### [Subtitle Translator](https://github.com/VjayC/SRT-Subtitle-Translator-Validator)
+当真实进程环境中的 `CLIPROXY_DISABLE_PLUGINS` 可由 Go `strconv.ParseBool` 解析为真值时：
 
-一款跨平台的桌面和 Web 应用程序，可通过 CLIProxyAPI 使用您现有的 LLM 订阅（Gemini、ChatGPT、Claude, etc.）来翻译和验证 SRT 字幕 - 无需 API 密钥。
+- `plugins.enabled` 在配置规范化阶段被强制设为 `false`。
+- 每个 `plugins.configs.<id>.enabled` 被强制设为 `false`。
+- 插件原始配置节点中的 `enabled` 同步改为 `false`。
+- 插件能力支持标志返回 `0`。
+- 插件商店访问、安装和插件配置变更请求被策略拒绝。
+- 通过完整 YAML 配置接口重新启用全局插件或单个插件会被拒绝。
 
-### [CCS (Claude Code Switch)](https://github.com/kaitranntt/ccs)
+建议只使用明确值：
 
-CLI 封装器，用于通过 CLIProxyAPI OAuth 即时切换多个 Claude 账户和替代模型（Gemini, Codex, Antigravity），无需 API 密钥。
+```text
+CLIPROXY_DISABLE_PLUGINS=true
+```
 
-### [Quotio](https://github.com/nguyenphutrong/quotio)
+变量缺失、为空或无法解析为布尔真值时，不会启用锁定策略。
 
-原生 macOS 菜单栏应用，统一管理 Claude、Gemini、OpenAI 和 Antigravity 订阅，提供实时配额追踪和智能自动故障转移，支持 Claude Code、OpenCode 和 Droid 等 AI 编程工具，无需 API 密钥。
+### 为什么保留部分插件接口
 
-### [ProxyPilot](https://github.com/Finesssee/ProxyPilot)
+锁定策略没有删除所有插件相关代码或管理路由。以下只读或清理能力仍保留：
 
-原生 Windows CLIProxyAPI 分支，集成 TUI、系统托盘及多服务商 OAuth 认证，专为 AI 编程工具打造，无需 API 密钥。
+- 列出已发现或已注册插件。
+- 读取单个插件配置。
+- 读取完整服务器配置或原始 `config.yaml`。
+- 删除现存插件，用于审计后的清理和退役。
 
-### [Claude Proxy VSCode](https://github.com/uzhao/claude-proxy-vscode)
+这样可以在禁止新增、安装、启用和修改插件的同时，保留盘点与清理路径。
 
-一款 VSCode 扩展，提供了在 VSCode 中快速切换 Claude Code 模型的功能，内置 CLIProxyAPI 作为其后端，支持后台自动启动和关闭。
+## 接口行为
 
-### [ZeroLimit](https://github.com/0xtbug/zero-limit)
+管理 API 的前缀为 `/v0/management`。是否可远程访问仍由上游管理配置和管理密钥控制。
 
-Windows 桌面应用，基于 Tauri + React 构建，用于通过 CLIProxyAPI 监控 AI 编程助手配额。支持跨 Gemini、Claude、OpenAI Codex 和 Antigravity 账户的使用量追踪，提供实时仪表盘、系统托盘集成和一键代理控制，无需 API 密钥。
+### 策略启用时返回统一 403
 
-### [CPA-XXX Panel](https://github.com/ferretgeek/CPA-X)
+以下操作在锁定策略下返回 HTTP `403 Forbidden`：
 
-面向 CLIProxyAPI 的 Web 管理面板，提供健康检查、资源监控、日志查看、自动更新、请求统计与定价展示，支持一键安装与 systemd 服务。
+| 方法 | 路径 | 行为 |
+| --- | --- | --- |
+| `GET` | `/v0/management/plugin-store` | 禁止访问插件商店 |
+| `POST` | `/v0/management/plugin-store/:id/install` | 禁止安装插件 |
+| `PATCH` | `/v0/management/plugins/:id/enabled` | 禁止切换插件启用状态 |
+| `PUT` | `/v0/management/plugins/:id/config` | 禁止替换插件配置 |
+| `PATCH` | `/v0/management/plugins/:id/config` | 禁止修改插件配置 |
+| `PUT` | `/v0/management/config.yaml` | 当 YAML 请求启用全局或任一插件时拒绝 |
 
-### [CLIProxyAPI Tray](https://github.com/kitephp/CLIProxyAPI_Tray)
+统一 JSON 响应为：
 
-Windows 托盘应用，基于 PowerShell 脚本实现，不依赖任何第三方库。主要功能包括：自动创建快捷方式、静默运行、密码管理、通道切换（Main / Plus）以及自动下载与更新。
+```json
+{
+  "error": "plugin_capability_disabled",
+  "message": "plugin capability is disabled by server policy"
+}
+```
 
-### [霖君](https://github.com/wangdabaoqq/LinJun)
+### 为审计与清理保留
 
-霖君是一款用于管理AI编程助手的跨平台桌面应用，支持macOS、Windows、Linux系统。统一管理Claude Code、Gemini、OpenAI Codex等AI编程工具，本地代理实现多账户配额跟踪和一键配置。
+以下管理操作没有被本 fork 的插件锁定处理器关闭：
 
-### [CLIProxyAPI Dashboard](https://github.com/itsmylife44/cliproxyapi-dashboard)
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/v0/management/plugins` | 插件盘点 |
+| `GET` | `/v0/management/plugins/:id/config` | 配置审计 |
+| `DELETE` | `/v0/management/plugins/:id` | 删除和清理 |
+| `GET` | `/v0/management/config` | 读取结构化配置 |
+| `GET` | `/v0/management/config.yaml` | 读取原始配置 |
 
-一个面向 CLIProxyAPI 的现代化 Web 管理仪表盘，基于 Next.js、React 和 PostgreSQL 构建。支持实时日志流、结构化配置编辑、API Key 管理、Claude/Gemini/Codex 的 OAuth 提供方集成、使用量分析、容器管理，并可通过配套插件与 OpenCode 同步配置，无需手动编辑 YAML。
+这些接口仍要求正常的管理认证与访问控制。
 
-### [All API Hub](https://github.com/qixing-jk/all-api-hub)
+## 根路径与安全响应头
 
-用于一站式管理 New API 兼容中转站账号的浏览器扩展，提供余额与用量看板、自动签到、密钥一键导出到常用应用、网页内 API 可用性测试，以及渠道与模型同步和重定向。支持通过 CLIProxyAPI Management API 一键导入 Provider 与同步配置。
+未认证的 `GET /` 返回精简的 HTML 页面：
 
-### [Shadow AI](https://github.com/HEUDavid/shadow-ai)
+```html
+<h1>Welcome</h1>
+```
 
-Shadow AI 是一款专为受限环境设计的 AI 辅助工具。提供无窗口、无痕迹的隐蔽运行方式，并通过局域网实现跨设备的 AI 问答交互与控制。本质上是一个「屏幕/音频采集 + AI 推理 + 低摩擦投送」的自动化协作层，帮助用户在受控设备/受限环境下沉浸式跨应用地使用 AI 助手。
+它不再返回原上游根 JSON 中的产品名称和示例 API 路径。响应包含：
 
-### [ProxyPal](https://github.com/buddingnewinsights/proxypal)
+- `Cache-Control: no-store`
+- `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'`
+- `Referrer-Policy: no-referrer`
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
 
-跨平台桌面应用（macOS、Windows、Linux），以原生 GUI 封装 CLIProxyAPI。支持连接 Claude、ChatGPT、Gemini、GitHub Copilot 及自定义 OpenAI 兼容端点，具备使用分析、请求监控和热门编程工具自动配置功能，无需 API 密钥。
+根处理器同时清除其响应上的常见 CORS 头。核心 `/v1`、`/healthz` 和管理 API 行为不因该提交而整体关闭。
 
-### [CLIProxyAPI Quota Inspector](https://github.com/AllenReder/CLIProxyAPI-Quota-Inspector)
+## 安全边界
 
-上手即用的面向 CLIProxyAPI 跨平台配额查询工具，支持按账号展示 codex 5h/7d 配额窗口、按计划排序、状态着色及多账号汇总分析。
+请按以下边界理解本 fork：
 
-### [CLIProxy Pool Watch](https://github.com/murasame612/CLIProxyPoolWidget)
+- 插件代码**没有从二进制中删除**。
+- 锁定策略**不是默认开启**；必须显式提供环境变量。
+- 不是所有管理接口都被关闭；审计、读取和删除路径仍保留。
+- 根页面通用化不是“完全去指纹”；端口、TLS、流量特征、其他路由和错误响应仍可能暴露实现信息。
+- 本项目不声称在所有嵌入式 SDK、自定义入口、被修改构建或恶意本地主机条件下不可绕过。
+- 能修改进程环境、二进制、启动参数、配置挂载或容器定义的主体，本质上属于受信任的部署控制面。
+- 管理 API、配置文件、认证目录和容器运行时仍需最小权限、网络隔离和密钥管理。
 
-原生 macOS SwiftUI 应用，用于监控 CLIProxyAPI 池中的 ChatGPT/Codex 账号额度。通过 Management API 展示账号可用状态、Plus 基准容量、5 小时与周额度进度条、套餐权重和恢复预测。
+## 源码构建
 
-### [Panopticon](https://github.com/eltmon/panopticon-cli)
+要求：
 
-面向 AI 编程助手的多智能体编排工具。它将 CLIProxyAPI 作为本地 sidecar 运行，使其智能体可以通过 ChatGPT 订阅驱动 GPT 模型，并将 Claude Code 指向 Anthropic 兼容端点，无需 OpenAI API 密钥。
+- Go `1.26` 或更高版本。
+- Git。
+- 使用当前仓库源码，而不是同名外部镜像。
 
-### [Tunnel Agent](https://github.com/Villoh/tunnel-agent)
+```bash
+git clone https://github.com/86669666/CLIProxyAPI-plugin-lockdown.git
+cd CLIProxyAPI-plugin-lockdown
+git rev-parse --short HEAD
+go build -o cli-proxy-api ./cmd/server
+```
 
-Windows 桌面 UI，通过单一界面管理 CLIProxyAPI 和 Perplexity WebUI Scraper，灵感来自 Quotio 和 VibeProxy。连接 OAuth 提供商（Claude、Gemini、Codex、Kimi、Antigravity）、自定义 API 密钥和 Perplexity 会话账号，然后将任意编程智能体指向本地端点。
+修改 Go 代码后，仓库要求执行：
 
-### [Quotio Desktop](https://github.com/xiaocoss/quotio-desktop)
+```bash
+gofmt -w .
+go build -o test-output ./cmd/server && rm test-output
+go test ./...
+```
 
-Quotio 的跨平台（Tauri）移植版，支持 Windows / macOS / Linux。通过 CLIProxyAPI 管理多账号代理池（Codex、Claude Code、GitHub Copilot、Gemini、Antigravity、Kiro、Cursor、Trae、GLM），提供每账号 5 小时 / 每周额度进度条、Codex 主动重置次数与一键重置、智能调度、用量统计及 Codex 多开实例，无需 API 密钥。
+本 README 修改不需要重新格式化 Go 文件。
 
-### [Universal Chat Provider](https://github.com/maxdewald/vscode-universal-chat-provider)
+## 本地运行
 
-VS Code 扩展，可将你的 Claude、ChatGPT/Codex、Antigravity、Grok 和 Kimi 订阅作为原生语言模型接入 GitHub Copilot Chat，并且也可用于生成 Git 提交信息、聊天标题和摘要。它以完全托管的后台生命周期运行 CLIProxyAPI（下载、验证、监督），并在所有窗口间共享，因此无需配置。无需 API 密钥，只需 OAuth。
+先从模板创建本地配置，并按上游文档配置 API 密钥、OAuth 凭据、认证目录和管理访问：
 
-### [CPA-Tray-Powershell](https://github.com/IQ-Director/CPA-Tray-Powershell)
+```bash
+cp config.example.yaml config.yaml
+```
 
-基于 PowerShell 的 Windows CLIProxyAPI 托盘启动工具。支持无终端窗口后台运行、打开管理页面、关闭管理窗口后保持后端运行，并可通过托盘重新打开页面；同时支持启动时自动检查 CLIProxyAPI 更新、SHA-256 校验与失败回滚、一键重启并更新 CLIProxyAPI、基于 PID 校验的进程管理以及安全停止服务。
+以锁定策略启动：
 
-### [Grok Search MCP](https://github.com/MapleMapleCat/Grok_Search_Mcp)
+```bash
+export CLIPROXY_DISABLE_PLUGINS=true
+./cli-proxy-api --config ./config.yaml
+```
 
-一个仅支持 HTTP 传输的模型上下文协议（MCP）服务器，使用 CLIProxyAPI 部署为 MCP 客户端提供由 Grok 驱动的实时网页搜索、X/Twitter 搜索和模型发现功能。它还提供 MCP 传输、客户端 API 密钥管理、配额、用量跟踪和 Web 管理面板。
+常用上游参数包括：
 
-> [!NOTE]  
-> 如果你开发了基于 CLIProxyAPI 的项目，请提交一个 PR（拉取请求）将其添加到此列表中。
+- `--config <path>`：指定配置文件。
+- `--tui`：启动终端界面。
+- `--standalone`：以独立模式运行 TUI。
+- `--local-model`：仅使用内置模型目录，不拉取远程模型目录。
+- `--no-browser`：OAuth 流程不自动打开浏览器。
+- `--oauth-callback-port <port>`：指定 OAuth 回调端口。
 
-## 更多选择
+不要在命令行、README、工单或日志中粘贴真实 API 密钥、管理密钥或 OAuth 令牌。
 
-以下项目是 CLIProxyAPI 的移植版或受其启发：
+## Docker 本地构建与运行
 
-### [9Router](https://github.com/decolua/9router)
+为确保使用本 fork 的代码，应明确本地构建镜像：
 
-基于 Next.js 的实现，灵感来自 CLIProxyAPI，易于安装使用；自研格式转换（OpenAI/Claude/Gemini/Ollama）、组合系统与自动回退、多账户管理（指数退避）、Next.js Web 控制台，并支持 Cursor、Claude Code、Cline、RooCode 等 CLI 工具，无需 API 密钥。
+```bash
+docker build \
+  --build-arg VERSION=v7.2.80-lockdown \
+  --build-arg COMMIT="$(git rev-parse --short HEAD)" \
+  --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -t cli-proxy-api-lockdown:local .
+```
 
-### [OmniRoute](https://github.com/diegosouzapw/OmniRoute)
+运行示例：
 
-代码不止，创新不停。智能路由至免费及低成本 AI 模型，并支持自动故障转移。
+```bash
+docker run --rm \
+  --name cli-proxy-api-lockdown \
+  -e CLIPROXY_DISABLE_PLUGINS=true \
+  -p 8317:8317 \
+  -v "$(pwd)/config.yaml:/CLIProxyAPI/config.yaml:ro" \
+  -v "$(pwd)/auths:/root/.cli-proxy-api" \
+  cli-proxy-api-lockdown:local
+```
 
-OmniRoute 是一个面向多供应商大语言模型的 AI 网关：它提供兼容 OpenAI 的端点，具备智能路由、负载均衡、重试及回退机制。通过添加策略、速率限制、缓存和可观测性，确保推理过程既可靠又具备成本意识。
+如需通过管理 API 写入配置，不要以只读方式挂载 `config.yaml`；应改用受保护的可写持久卷，并限制宿主机权限。
 
-### [Playful Proxy API Panel (PPAP)](https://github.com/daishuge/playful-proxy-api-panel)
+## Compose 风险
 
-一个公开的 CLIProxyAPI 兼容二开版本和配套管理面板，尽量保持与上游一致的使用方式，同时恢复内置使用量统计，并补充缓存命中率、首字响应时间、TPS 记录和面向 Docker 自托管的安装说明。
+仓库当前 `docker-compose.yml` 和 `docker-compose.cluster.yml` 默认包含：
 
-### [Codex Switch](https://github.com/9ycrooked/CodexSwitch)
+```yaml
+image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}
+pull_policy: always
+```
 
-这是一个使用 Tauri 2 + Vue 3 构建的工具，用于管理多个 OpenAI Codex 桌面账户。它可以在已保存的 ChatGPT/Codex 认证配置之间切换，实时查看 5 小时和每周配额使用情况，验证 token 健康状态，查看当前账户详情，并在无需手动复制的情况下导入或保存 auth.json 文件。
+这意味着直接执行普通 `docker compose up` 可能拉取并运行外部 `latest` 镜像，而不是当前 fork 的本地源码构建结果。
 
-> [!NOTE]  
-> 如果你开发了 CLIProxyAPI 的移植或衍生项目，请提交 PR 将其添加到此列表中。
+此外，现有 Compose 文件默认没有向容器传入 `CLIPROXY_DISABLE_PLUGINS=true`。因此不能把默认 Compose 启动视为已锁定部署。
 
-## 许可证
+安全使用时应同时做到：
 
-此项目根据 MIT 许可证授权 - 有关详细信息，请参阅 [LICENSE](LICENSE) 文件。
+1. 使用本地构建标签或固定到经验证的 fork 镜像摘要。
+2. 删除或覆盖 `pull_policy: always`，避免本地镜像被外部镜像替换。
+3. 在容器创建时显式注入 `CLIPROXY_DISABLE_PLUGINS=true`。
+4. 用 `docker compose config` 检查最终展开结果。
+5. 启动后执行健康检查和策略检查。
 
-## 写给所有中国网友的
+可使用只针对本次启动的覆盖文件，不必修改仓库 Compose 文件：
 
-QQ 群：188637136（满）、1081218164
+```yaml
+services:
+  cli-proxy-api:
+    image: cli-proxy-api-lockdown:local
+    pull_policy: never
+    environment:
+      CLIPROXY_DISABLE_PLUGINS: "true"
+```
 
-或
+```bash
+docker compose -f docker-compose.yml -f compose.lockdown.yml config
+docker compose -f docker-compose.yml -f compose.lockdown.yml up -d
+```
 
-Telegram 群：https://t.me/CLIProxyAPI
+## 健康与策略验证
+
+### 健康检查
+
+```bash
+curl --fail --silent --show-error http://127.0.0.1:8317/healthz
+```
+
+预期响应：
+
+```json
+{"status":"ok"}
+```
+
+### 根页面检查
+
+```bash
+curl --include http://127.0.0.1:8317/
+```
+
+确认状态为 `200`、内容类型为 `text/html`、页面只显示通用 Welcome 内容，并存在前述安全响应头。
+
+### 插件策略检查
+
+先在 shell 中安全提供管理密钥：
+
+```bash
+export MANAGEMENT_KEY='<set-locally>'
+```
+
+然后请求受限接口：
+
+```bash
+curl --silent --show-error \
+  -H "Authorization: Bearer ${MANAGEMENT_KEY}" \
+  http://127.0.0.1:8317/v0/management/plugin-store
+```
+
+预期 HTTP 状态为 `403`，响应中的 `error` 为 `plugin_capability_disabled`。
+
+检查保留的盘点接口：
+
+```bash
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer ${MANAGEMENT_KEY}" \
+  http://127.0.0.1:8317/v0/management/plugins
+```
+
+代理 API 验证示例：
+
+```bash
+export API_KEY='<set-locally>'
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer ${API_KEY}" \
+  http://127.0.0.1:8317/v1/models
+```
+
+所有 `Authorization` 示例只使用 `${MANAGEMENT_KEY}` 或 `${API_KEY}`，不要替换为需要提交到版本库的真实值。
+
+## 配置验证临时文件
+
+管理端接收 `PUT /v0/management/config.yaml` 时，会先写入临时文件并调用配置加载逻辑验证内容。
+
+本 fork 使用：
+
+```text
+os.CreateTemp("", "cliproxyapi-config-validate-*.yaml")
+```
+
+空目录参数让 Go 使用系统临时目录，而不是在实际 `config.yaml` 旁创建验证文件。成功或失败后仍会尝试删除该临时文件。
+
+这项调整降低了配置目录中出现短生命周期验证副本的概率，但不替代操作系统临时目录权限、磁盘加密和主机隔离。
+
+## 上游同步
+
+本 fork 固定说明的基线是 `v7.2.80` / `09da52ad`。后续合并或变基上游时，需要重新审查安全假设。
+
+重点检查：
+
+- `cmd/server/main.go` 中插件 bootstrap 与 `.env` 加载顺序。
+- `internal/config` 中插件配置解析和规范化路径。
+- `internal/pluginhost` 中插件加载、能力声明和动态路由注册。
+- `/v0/management` 的插件商店、启用、配置、删除和完整 YAML 写入接口。
+- `GET /`、CORS 中间件和安全响应头。
+- Compose 默认镜像、拉取策略和环境变量传递。
+- 新增入口、SDK 嵌入方式或绕过标准 CLI 启动流程的代码。
+
+同步后至少运行：
+
+```bash
+gofmt -w .
+go test ./...
+go build -o test-output ./cmd/server && rm test-output
+git diff --check
+```
+
+不要仅因补丁能够干净应用，就假设锁定策略仍覆盖新的上游执行路径。
+
+## 文档与开发
+
+- 配置模板：[`config.example.yaml`](config.example.yaml)
+- SDK 使用：[`docs/sdk-usage_CN.md`](docs/sdk-usage_CN.md)
+- SDK 高级用法：[`docs/sdk-advanced_CN.md`](docs/sdk-advanced_CN.md)
+- SDK 认证：[`docs/sdk-access_CN.md`](docs/sdk-access_CN.md)
+- 凭据加载与更新：[`docs/sdk-watcher_CN.md`](docs/sdk-watcher_CN.md)
+- 自定义 Provider 示例：[`examples/custom-provider`](examples/custom-provider)
+
+贡献安全改动时，请保持补丁小而可验证，不要记录密钥或令牌，并为策略边界添加针对性测试。
+
+## 许可证与归属
+
+本仓库继续使用 [MIT License](LICENSE)。
+
+CLIProxyAPI 的原始设计、主体实现和上游维护归属于 [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 及其贡献者。本 fork 仅在 `v7.2.80` 基线上维护本文所述的非官方安全调整。
+
+使用、修改或再分发时，请保留 MIT 许可证文本和原有版权声明。
