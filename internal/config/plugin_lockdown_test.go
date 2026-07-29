@@ -31,9 +31,13 @@ func TestNormalizePluginsConfigDisablePolicyForcesRuntimeOff(t *testing.T) {
 	}
 }
 
-func TestPluginsDisabledByPolicyInvalidValueDoesNotDisable(t *testing.T) {
+func TestPluginsDisabledByPolicyInvalidValueReturnsError(t *testing.T) {
 	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "not-a-bool")
-	if PluginsDisabledByPolicy() {
+	disabled, err := PluginsDisabledByPolicy()
+	if err == nil {
+		t.Fatal("PluginsDisabledByPolicy() error = nil, want error")
+	}
+	if disabled {
 		t.Fatal("PluginsDisabledByPolicy() = true for invalid value")
 	}
 }

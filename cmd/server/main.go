@@ -151,10 +151,6 @@ func main() {
 
 	pluginHost := pluginhost.New()
 	if bootstrapCfg := loadPluginBootstrapConfig(pluginBootstrapConfigPath(os.Args[1:], DefaultConfigPath)); bootstrapCfg != nil {
-		// Log plugin security policy status before bootstrap
-		if config.PluginsDisabledByPolicy() {
-			log.Info("Plugin capabilities disabled by security policy (CLIPROXY_DISABLE_PLUGINS=true)")
-		}
 		pluginHost.ApplyConfig(context.Background(), bootstrapCfg)
 		pluginHost.RegisterCommandLineFlags(context.Background(), flag.CommandLine)
 	}
