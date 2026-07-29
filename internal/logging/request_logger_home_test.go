@@ -92,7 +92,8 @@ func TestFileRequestLogger_HomeEnabled_ForwardsWhenRequestLogEnabled(t *testing.
 
 	requestHeaders := map[string][]string{
 		"Content-Type":  {"application/json"},
-		"Authorization": {"Bearer secret"},
+		"Authorization": {"Bearer super-secret-token"},
+		"Cookie":        {"session=super-secret-cookie"},
 	}
 
 	errLog := logger.LogRequest(
@@ -139,8 +140,14 @@ func TestFileRequestLogger_HomeEnabled_ForwardsWhenRequestLogEnabled(t *testing.
 	if got.Headers == nil || got.Headers["Content-Type"][0] != "application/json" {
 		t.Fatalf("headers.content-type = %+v, want application/json", got.Headers["Content-Type"])
 	}
-	if got.Headers == nil || got.Headers["Authorization"][0] != "Bearer secret" {
-		t.Fatalf("headers.authorization = %+v, want Bearer secret", got.Headers["Authorization"])
+	if got.Headers == nil || got.Headers["Authorization"][0] != "Bearer supe...oken" {
+		t.Fatalf("headers.authorization = %+v, want redacted value", got.Headers["Authorization"])
+	}
+	if got.Headers == nil || got.Headers["Cookie"][0] != redactedHeaderValue {
+		t.Fatalf("headers.cookie = %+v, want redacted value", got.Headers["Cookie"])
+	}
+	if bytes.Contains(stub.pushed[0], []byte("super-secret-token")) || bytes.Contains(stub.pushed[0], []byte("super-secret-cookie")) {
+		t.Fatalf("home payload contains raw credentials: %s", string(stub.pushed[0]))
 	}
 	if got.RequestID != "req-1" {
 		t.Fatalf("request_id = %q, want req-1", got.RequestID)
