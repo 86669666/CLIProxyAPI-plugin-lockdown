@@ -72,17 +72,16 @@ func main() {
 	// Load .env early for security policy variables (e.g., CLIPROXY_DISABLE_PLUGINS)
 	// This must happen BEFORE plugin bootstrap to prevent timing bypass attacks.
 	if wd, err := os.Getwd(); err == nil {
-		_ = godotenv.Load(filepath.Join(wd, ".env"))
+		loadStartupDotEnv(wd)
 	}
 
 	fmt.Printf("CLIProxyAPI Version: %s, Commit: %s, BuiltAt: %s\n", buildinfo.Version, buildinfo.Commit, buildinfo.BuildDate)
 
-	pluginsDisabled, errPolicy := config.PluginsDisabledByPolicy()
+	pluginsDisabled, errPolicy := evaluateStartupPluginPolicy()
 	if errPolicy != nil {
-		log.WithError(errPolicy).Error("invalid plugin lockdown policy; refusing to start")
 		os.Exit(1)
 	}
-	log.WithField("disabled", pluginsDisabled).Info("plugin lockdown policy evaluated")
+	_ = pluginsDisabled
 
 	// Command-line flags to control the application's behavior.
 	var codexLogin bool
@@ -715,6 +714,23 @@ func main() {
 			cmd.StartServiceWithPluginHost(cfg, configFilePath, password, pluginHost, serverOptions...)
 		}
 	}
+}
+
+func loadStartupDotEnv(workDir string) {
+	errLoad := godotenv.Load(filepath.Join(workDir, ".env"))
+	if errLoad != nil && !errors.Is(errLoad, os.ErrNotExist) {
+		log.WithError(errLoad).Warn("failed to load .env file")
+	}
+}
+
+func evaluateStartupPluginPolicy() (bool, error) {
+	pluginsDisabled, errPolicy := config.PluginsDisabledByPolicy()
+	if errPolicy != nil {
+		log.WithError(errPolicy).Error("invalid plugin lockdown policy; refusing to start")
+		return false, errPolicy
+	}
+	log.WithField("disabled", pluginsDisabled).Info("plugin lockdown policy evaluated")
+	return pluginsDisabled, nil
 }
 
 // modelCatalogUpdaterPlan decides which remote model catalogs should refresh.
