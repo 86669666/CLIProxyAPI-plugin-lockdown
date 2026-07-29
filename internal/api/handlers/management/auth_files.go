@@ -734,6 +734,7 @@ func (h *Handler) DownloadAuthFile(c *gin.Context) {
 
 // Upload auth file: multipart or raw JSON with ?name=
 func (h *Handler) UploadAuthFile(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, uploadRequestMaxBytes)
 	if h.authManager == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
 		return
@@ -742,11 +743,25 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 
 	fileHeaders, errMultipart := h.multipartAuthFileHeaders(c)
 	if errMultipart != nil {
+		if isRequestBodyTooLarge(errMultipart) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request entity too large"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid multipart form: %v", errMultipart)})
 		return
 	}
+	for _, fileHeader := range fileHeaders {
+		if fileHeader != nil && fileHeader.Size > uploadedFileMaxBytes {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errUploadedFileTooLarge.Error()})
+			return
+		}
+	}
 	if len(fileHeaders) == 1 {
 		if _, errUpload := h.storeUploadedAuthFile(ctx, fileHeaders[0]); errUpload != nil {
+			if errors.Is(errUpload, errUploadedFileTooLarge) {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errUpload.Error()})
+				return
+			}
 			if errors.Is(errUpload, errAuthFileMustBeJSON) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "file must be .json"})
 				return
@@ -803,7 +818,15 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 	}
 	data, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request entity too large"})
+			return
+		}
 		c.JSON(400, gin.H{"error": "failed to read body"})
+		return
+	}
+	if int64(len(data)) > uploadedFileMaxBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errUploadedFileTooLarge.Error()})
 		return
 	}
 	if err = h.writeAuthFile(ctx, filepath.Base(name), data); err != nil {
@@ -923,6 +946,9 @@ func (h *Handler) storeUploadedAuthFile(ctx context.Context, file *multipart.Fil
 	if file == nil {
 		return "", fmt.Errorf("no file uploaded")
 	}
+	if file.Size > uploadedFileMaxBytes {
+		return "", errUploadedFileTooLarge
+	}
 	name := filepath.Base(strings.TrimSpace(file.Filename))
 	if !strings.HasSuffix(strings.ToLower(name), ".json") {
 		return "", errAuthFileMustBeJSON
@@ -933,9 +959,12 @@ func (h *Handler) storeUploadedAuthFile(ctx context.Context, file *multipart.Fil
 	}
 	defer src.Close()
 
-	data, err := io.ReadAll(src)
+	data, err := io.ReadAll(io.LimitReader(src, uploadedFileMaxBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("failed to read uploaded file: %w", err)
+	}
+	if int64(len(data)) > uploadedFileMaxBytes {
+		return "", errUploadedFileTooLarge
 	}
 	if err := h.writeAuthFile(ctx, name, data); err != nil {
 		return "", err

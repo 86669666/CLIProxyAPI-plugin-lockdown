@@ -161,7 +161,16 @@ func (h *Handler) SetConfigReloadHook(hook func(context.Context, *config.Config)
 }
 
 func rejectDisabledPluginCapability(c *gin.Context) bool {
-	if !config.PluginsDisabledByPolicy() {
+	disabled, err := config.PluginsDisabledByPolicy()
+	if err != nil {
+		log.WithError(err).Error("invalid plugin lockdown policy")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "invalid_plugin_policy",
+			"message": "plugin lockdown policy is invalid",
+		})
+		return true
+	}
+	if !disabled {
 		return false
 	}
 	c.JSON(http.StatusForbidden, gin.H{

@@ -15,6 +15,7 @@ import (
 
 // ImportVertexCredential handles uploading a Vertex service account JSON and saving it as an auth record.
 func (h *Handler) ImportVertexCredential(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, uploadRequestMaxBytes)
 	if h == nil || h.cfg == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "config unavailable"})
 		return
@@ -26,7 +27,15 @@ func (h *Handler) ImportVertexCredential(c *gin.Context) {
 
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request entity too large"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "file required"})
+		return
+	}
+	if fileHeader.Size > uploadedFileMaxBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errUploadedFileTooLarge.Error()})
 		return
 	}
 
@@ -37,9 +46,13 @@ func (h *Handler) ImportVertexCredential(c *gin.Context) {
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
+	data, err := io.ReadAll(io.LimitReader(file, uploadedFileMaxBytes+1))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("failed to read file: %v", err)})
+		return
+	}
+	if int64(len(data)) > uploadedFileMaxBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errUploadedFileTooLarge.Error()})
 		return
 	}
 
