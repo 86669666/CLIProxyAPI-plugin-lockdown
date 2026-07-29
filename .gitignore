@@ -30,6 +30,8 @@ auths/*
 
 # Documentation
 docs/*
+!docs/API_REFERENCE.md
+!docs/CONFIGURATION.md
 AGENTS.md
 CLAUDE.md
 GEMINI.md

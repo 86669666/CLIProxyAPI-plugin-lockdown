@@ -77,11 +77,10 @@ func main() {
 
 	fmt.Printf("CLIProxyAPI Version: %s, Commit: %s, BuiltAt: %s\n", buildinfo.Version, buildinfo.Commit, buildinfo.BuildDate)
 
-	pluginsDisabled, errPolicy := evaluateStartupPluginPolicy()
+	_, errPolicy := evaluateStartupPluginPolicy()
 	if errPolicy != nil {
 		os.Exit(1)
 	}
-	_ = pluginsDisabled
 
 	// Command-line flags to control the application's behavior.
 	var codexLogin bool
