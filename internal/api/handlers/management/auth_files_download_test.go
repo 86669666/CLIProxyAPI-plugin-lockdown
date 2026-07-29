@@ -58,3 +58,30 @@ func TestDownloadAuthFile_RejectsPathSeparators(t *testing.T) {
 		}
 	}
 }
+
+func TestDownloadAuthFile_RejectsSymlink(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+
+	authDir := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret.json")
+	if err := os.WriteFile(secret, []byte(`{"secret":"must not be downloaded"}`), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+	fileName := "linked-auth.json"
+	if err := os.Symlink(secret, filepath.Join(authDir, fileName)); err != nil {
+		t.Skipf("create symbolic link: %v", err)
+	}
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, nil)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/auth-files/download?name="+url.QueryEscape(fileName), nil)
+	h.DownloadAuthFile(ctx)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() == `{"secret":"must not be downloaded"}` {
+		t.Fatal("download response exposed the symlink target")
+	}
+}

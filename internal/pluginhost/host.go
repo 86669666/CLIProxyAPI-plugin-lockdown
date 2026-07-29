@@ -196,13 +196,7 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 	h.mu.Unlock()
 
 	if !rc.Enabled {
-		h.mu.Lock()
-		h.managementRoutes = make(map[string]managementRouteRecord)
-		h.resourceRoutes = make(map[string]resourceRouteRecord)
-		h.rebuildActivePluginMapsLocked(nil)
-		h.snapshot.Store(emptySnapshot())
-		h.mu.Unlock()
-		h.refreshThinkingProviders(nil)
+		h.shutdownAll()
 		return
 	}
 
@@ -440,7 +434,10 @@ func (h *Host) ShutdownAll() {
 
 	h.applyMu.Lock()
 	defer h.applyMu.Unlock()
+	h.shutdownAll()
+}
 
+func (h *Host) shutdownAll() {
 	targets := make([]pluginUnloadTarget, 0)
 	h.mu.Lock()
 	for _, lp := range h.loaded {

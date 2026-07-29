@@ -69,7 +69,20 @@ func shouldEnableExampleAPIKeySafeMode(cfg *config.Config, commandMode, tuiMode,
 // It parses command-line flags, loads configuration, and starts the appropriate
 // service based on the provided flags (login, codex-login, or server mode).
 func main() {
+	// Load .env early for security policy variables (e.g., CLIPROXY_DISABLE_PLUGINS)
+	// This must happen BEFORE plugin bootstrap to prevent timing bypass attacks.
+	if wd, err := os.Getwd(); err == nil {
+		_ = godotenv.Load(filepath.Join(wd, ".env"))
+	}
+
 	fmt.Printf("CLIProxyAPI Version: %s, Commit: %s, BuiltAt: %s\n", buildinfo.Version, buildinfo.Commit, buildinfo.BuildDate)
+
+	pluginsDisabled, errPolicy := config.PluginsDisabledByPolicy()
+	if errPolicy != nil {
+		log.WithError(errPolicy).Error("invalid plugin lockdown policy; refusing to start")
+		os.Exit(1)
+	}
+	log.WithField("disabled", pluginsDisabled).Info("plugin lockdown policy evaluated")
 
 	// Command-line flags to control the application's behavior.
 	var codexLogin bool
@@ -181,12 +194,8 @@ func main() {
 		return
 	}
 
-	// Load environment variables from .env if present.
-	if errLoad := godotenv.Load(filepath.Join(wd, ".env")); errLoad != nil {
-		if !errors.Is(errLoad, os.ErrNotExist) {
-			log.WithError(errLoad).Warn("failed to load .env file")
-		}
-	}
+	// .env was already loaded early in main() for security policy variables.
+	// This section is kept for backward compatibility but is now redundant.
 
 	lookupEnv := func(keys ...string) (string, bool) {
 		for _, key := range keys {

@@ -880,7 +880,12 @@ func (cfg *Config) NormalizePluginsConfig() {
 	if cfg.Plugins.Configs == nil {
 		cfg.Plugins.Configs = map[string]PluginInstanceConfig{}
 	}
-	if PluginsDisabledByPolicy() {
+	disabled, errPolicy := PluginsDisabledByPolicy()
+	if errPolicy != nil {
+		log.WithError(errPolicy).Error("invalid plugin lockdown policy; disabling plugins")
+		disabled = true
+	}
+	if disabled {
 		cfg.Plugins.Enabled = false
 		for id, item := range cfg.Plugins.Configs {
 			disabled := false
@@ -892,10 +897,16 @@ func (cfg *Config) NormalizePluginsConfig() {
 }
 
 // PluginsDisabledByPolicy reports whether the process-wide plugin lockdown is enabled.
-func PluginsDisabledByPolicy() bool {
+func PluginsDisabledByPolicy() (bool, error) {
 	raw := strings.TrimSpace(os.Getenv("CLIPROXY_DISABLE_PLUGINS"))
+	if raw == "" {
+		return false, nil
+	}
 	disabled, err := strconv.ParseBool(raw)
-	return err == nil && disabled
+	if err != nil {
+		return false, fmt.Errorf("invalid CLIPROXY_DISABLE_PLUGINS value %q: %w", raw, err)
+	}
+	return disabled, nil
 }
 
 func setPluginRawEnabled(node *yaml.Node, enabled bool) {

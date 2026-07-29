@@ -108,8 +108,13 @@ func WriteConfig(path string, data []byte) error {
 }
 
 func (h *Handler) PutConfigYAML(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, configYAMLMaxBodyBytes)
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request entity too large"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_yaml", "message": "cannot read request body"})
 		return
 	}
@@ -118,7 +123,16 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_yaml", "message": err.Error()})
 		return
 	}
-	if config.PluginsDisabledByPolicy() && pluginConfigRequestsEnable(&cfg) {
+	disabled, errPolicy := config.PluginsDisabledByPolicy()
+	if errPolicy != nil {
+		log.WithError(errPolicy).Error("invalid plugin lockdown policy")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "invalid_plugin_policy",
+			"message": "plugin lockdown policy is invalid",
+		})
+		return
+	}
+	if disabled && pluginConfigRequestsEnable(&cfg) {
 		rejectDisabledPluginCapability(c)
 		return
 	}

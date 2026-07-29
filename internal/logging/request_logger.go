@@ -459,7 +459,7 @@ func (l *FileRequestLogger) forwardRequestLogToHome(ctx context.Context, headers
 		return nil
 	}
 	payload := homeRequestLogPayload{
-		Headers:    cloneHeaders(headers),
+		Headers:    RedactHeaders(headers),
 		RequestID:  strings.TrimSpace(requestID),
 		RequestLog: logText,
 	}
@@ -592,6 +592,7 @@ func (l *FileRequestLogger) logRequestWithSources(url, method string, requestHea
 	}
 
 	if l.homeEnabled && l.enabled {
+		redactedRequestHeaders := RedactHeaders(requestHeaders)
 		responseToWrite, decompressErr := l.decompressResponse(responseHeaders, response)
 		if decompressErr != nil {
 			responseToWrite = response
@@ -602,7 +603,7 @@ func (l *FileRequestLogger) logRequestWithSources(url, method string, requestHea
 			&buf,
 			url,
 			method,
-			requestHeaders,
+			redactedRequestHeaders,
 			body,
 			"",
 			websocketTimeline,
@@ -624,7 +625,7 @@ func (l *FileRequestLogger) logRequestWithSources(url, method string, requestHea
 		if writeErr != nil {
 			return fmt.Errorf("failed to build request log content: %w", writeErr)
 		}
-		return l.forwardRequestLogToHome(context.Background(), requestHeaders, requestID, buf.String())
+		return l.forwardRequestLogToHome(context.Background(), redactedRequestHeaders, requestID, buf.String())
 	}
 
 	// Ensure logs directory exists
@@ -2029,18 +2030,11 @@ type homeStreamingLogWriter struct {
 }
 
 func newHomeStreamingLogWriter(url, method string, headers map[string][]string, body []byte, requestID string) *homeStreamingLogWriter {
-	requestHeaders := make(map[string][]string, len(headers))
-	for key, values := range headers {
-		headerValues := make([]string, len(values))
-		copy(headerValues, values)
-		requestHeaders[key] = headerValues
-	}
-
 	writer := &homeStreamingLogWriter{
 		url:            url,
 		method:         method,
 		timestamp:      time.Now(),
-		requestHeaders: requestHeaders,
+		requestHeaders: RedactHeaders(headers),
 		requestBody:    append([]byte(nil), body...),
 		requestID:      strings.TrimSpace(requestID),
 		chunkChan:      make(chan []byte, 100),
@@ -2159,7 +2153,7 @@ func (w *homeStreamingLogWriter) Close() error {
 	}
 
 	payload := homeRequestLogPayload{
-		Headers:    cloneHeaders(w.requestHeaders),
+		Headers:    RedactHeaders(w.requestHeaders),
 		RequestID:  w.requestID,
 		RequestLog: buf.String(),
 	}

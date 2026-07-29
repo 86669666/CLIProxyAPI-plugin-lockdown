@@ -90,6 +90,74 @@ plugins:
 	}
 }
 
+func TestHostApplyConfig_DisabledGlobalShutsDownLoadedAndRetiredPlugins(t *testing.T) {
+	loader := newTestSymbolLoader()
+	activeLookup := newTestSymbolLookup(&testPlugin{
+		registerResult: validTestPlugin("alpha"),
+	})
+	loader.lookups["alpha"] = activeLookup
+	h := NewForTest(loader)
+	pluginsDir, paths := makeVersionedPluginDir(t, "alpha", "1.0.4")
+
+	h.ApplyConfig(context.Background(), &config.Config{
+		Plugins: config.PluginsConfig{
+			Enabled: true,
+			Dir:     pluginsDir,
+			Configs: map[string]config.PluginInstanceConfig{
+				"alpha": enabledPluginConfigWithStoreVersion(t, "1.0.4"),
+			},
+		},
+	})
+
+	retiredLookup := activeLookup
+	activeLookup = newTestSymbolLookup(&testPlugin{
+		registerResult: validTestPlugin("alpha"),
+	})
+	loader.lookups["alpha"] = activeLookup
+	paths["1.0.5"] = writeVersionedPluginFile(t, pluginsDir, "alpha", "1.0.5")
+	h.ApplyConfig(context.Background(), &config.Config{
+		Plugins: config.PluginsConfig{
+			Enabled: true,
+			Dir:     pluginsDir,
+			Configs: map[string]config.PluginInstanceConfig{
+				"alpha": enabledPluginConfigWithStoreVersion(t, "1.0.5"),
+			},
+		},
+	})
+
+	if !h.pluginIdentityCurrent("alpha", paths["1.0.5"], "1.0.5") {
+		t.Fatal("active plugin identity did not switch before disable")
+	}
+	h.mu.Lock()
+	h.loading["stale"] = struct{}{}
+	h.mu.Unlock()
+
+	h.ApplyConfig(context.Background(), &config.Config{
+		Plugins: config.PluginsConfig{Enabled: false},
+	})
+
+	if activeLookup.shutdownCalls != 1 {
+		t.Fatalf("active shutdown calls = %d, want 1", activeLookup.shutdownCalls)
+	}
+	if retiredLookup.shutdownCalls != 1 {
+		t.Fatalf("retired shutdown calls = %d, want 1", retiredLookup.shutdownCalls)
+	}
+	if h.PluginBusy("alpha") || h.PluginBusy("stale") {
+		t.Fatal("PluginBusy() = true after global disable")
+	}
+	h.mu.Lock()
+	loadedCount := len(h.loaded)
+	retiredCount := len(h.retired)
+	loadingCount := len(h.loading)
+	h.mu.Unlock()
+	if loadedCount != 0 || retiredCount != 0 || loadingCount != 0 {
+		t.Fatalf("plugin state sizes = loaded %d retired %d loading %d, want all zero", loadedCount, retiredCount, loadingCount)
+	}
+	if snap := h.Snapshot(); snap.enabled || len(snap.records) != 0 {
+		t.Fatalf("Snapshot() = %+v, want empty disabled snapshot", snap)
+	}
+}
+
 func TestHostApplyConfig_ExpandsPluginsDirLeadingTilde(t *testing.T) {
 	loader := newTestSymbolLoader()
 	plugin := &testPlugin{
