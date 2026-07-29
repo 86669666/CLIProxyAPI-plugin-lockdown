@@ -13,7 +13,7 @@
 ### 关键成果
 - ✅ **100% 审计完成**：4 维度 × 867 行 × 37KB
 - ✅ **100% 修复完成**：6/6 P0/P1 问题
-- ✅ **100% 测试覆盖**：+300 行测试代码
+- ✅ **测试覆盖**：6 项修复均新增或更新测试（+300 行测试代码）
 - ✅ **生产部署完成**：v7.2.81-security
 
 ---
@@ -173,7 +173,7 @@
 
 ### 生产部署
 
-**目标环境**：旺财（10.10.10.111）
+**目标环境**：生产服务器
 
 **部署步骤**：
 ```bash
@@ -186,10 +186,10 @@
    systemctl stop cliproxyapi.service
 
 3. 备份旧版本
-   /opt/cliproxyapi/bin/cli-proxy-api.backup-*
+   备份至专用目录
 
 4. 部署新版本
-   scp cli-proxy-api-security → /opt/cliproxyapi/bin/
+   传输编译后的二进制文件
 
 5. 启动服务
    systemctl start cliproxyapi.service
@@ -223,10 +223,10 @@
 ## 🎯 成果与影响
 
 ### 安全改进
-- 🔒 **6 个高危漏洞**全部修复
+- 🔒 **6 个 P0/P1 问题**全部修复
 - 🛡️ **4 个新安全机制**：redactor, safe file access, body limits, fail-closed
-- 📝 **100% 测试覆盖**：所有修复都有测试
-- 🔍 **所有构建通过**：lint clean, tests pass
+- 📝 **测试覆盖**：6 项修复均有测试验证
+- 🔍 **所有构建通过**：lint clean, 定向测试通过
 
 ### 技术债务
 - ⚠️ 仍落后上游 96 个提交
