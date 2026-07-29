@@ -28,8 +28,8 @@ func (c Client) DownloadArtifact(ctx context.Context, artifact Artifact) ([]byte
 	if errValidate := ValidateArtifact(artifact); errValidate != nil {
 		return nil, errValidate
 	}
-	maxSize := int64(0)
-	if artifact.Size > 0 {
+	maxSize := maxPluginDownloadSize
+	if artifact.Size > 0 && artifact.Size < maxSize {
 		maxSize = artifact.Size
 	}
 	data, errDownload := c.get(ctx, artifact.URL, "application/octet-stream", RequestKindArtifact, maxSize)

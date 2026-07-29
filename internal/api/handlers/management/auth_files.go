@@ -680,12 +680,7 @@ func authEmail(auth *coreauth.Auth) string {
 	return ""
 }
 
-func authAttribute(auth *coreauth.Auth, key string) string {
-	if auth == nil || len(auth.Attributes) == 0 {
-		return ""
-	}
-	return auth.Attributes[key]
-}
+// authAttribute is defined in api_tools.go and shared across handlers
 
 func isRuntimeOnlyAuth(auth *coreauth.Auth) bool {
 	if auth == nil || len(auth.Attributes) == 0 {

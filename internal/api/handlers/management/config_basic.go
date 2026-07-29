@@ -2,10 +2,13 @@ package management
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -90,21 +93,80 @@ func (h *Handler) GetLatestVersion(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"latest-version": version})
 }
 
-func WriteConfig(path string, data []byte) error {
+func WriteConfig(path string, data []byte) (err error) {
 	data = config.NormalizeCommentIndentation(data)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	configDir := filepath.Dir(path)
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	if err := os.Chmod(configDir, 0o700); err != nil {
+		return fmt.Errorf("set config directory permissions: %w", err)
+	}
+
+	tempFile, err := os.CreateTemp(configDir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temporary config file: %w", err)
 	}
-	if _, errWrite := f.Write(data); errWrite != nil {
-		_ = f.Close()
-		return errWrite
+	tempPath := tempFile.Name()
+	tempOpen := true
+	defer func() {
+		if tempOpen {
+			if errClose := tempFile.Close(); errClose != nil {
+				err = errors.Join(err, fmt.Errorf("close temporary config file: %w", errClose))
+			}
+		}
+		if tempPath != "" {
+			if errRemove := os.Remove(tempPath); errRemove != nil && !os.IsNotExist(errRemove) {
+				err = errors.Join(err, fmt.Errorf("remove temporary config file: %w", errRemove))
+			}
+		}
+	}()
+
+	if errChmod := tempFile.Chmod(0o600); errChmod != nil {
+		return fmt.Errorf("set config file permissions: %w", errChmod)
 	}
-	if errSync := f.Sync(); errSync != nil {
-		_ = f.Close()
-		return errSync
+	if bytesWritten, errWrite := tempFile.Write(data); errWrite != nil {
+		return fmt.Errorf("write temporary config file: %w", errWrite)
+	} else if bytesWritten != len(data) {
+		return fmt.Errorf("write temporary config file: %w", io.ErrShortWrite)
 	}
-	return f.Close()
+	if errSync := tempFile.Sync(); errSync != nil {
+		return fmt.Errorf("sync temporary config file: %w", errSync)
+	}
+	if errClose := tempFile.Close(); errClose != nil {
+		tempOpen = false
+		return fmt.Errorf("close temporary config file: %w", errClose)
+	}
+	tempOpen = false
+
+	if errRename := os.Rename(tempPath, path); errRename != nil {
+		return fmt.Errorf("replace config file: %w", errRename)
+	}
+	tempPath = ""
+	if errSyncDir := syncConfigDirectory(configDir); errSyncDir != nil {
+		return fmt.Errorf("sync config directory: %w", errSyncDir)
+	}
+	return nil
+}
+
+func syncConfigDirectory(path string) (err error) {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+
+	dir, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open directory: %w", err)
+	}
+	defer func() {
+		if errClose := dir.Close(); errClose != nil {
+			err = errors.Join(err, fmt.Errorf("close directory: %w", errClose))
+		}
+	}()
+	if errSync := dir.Sync(); errSync != nil {
+		return fmt.Errorf("sync directory: %w", errSync)
+	}
+	return nil
 }
 
 func (h *Handler) PutConfigYAML(c *gin.Context) {
@@ -164,7 +226,8 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if WriteConfig(h.configFilePath, body) != nil {
+	if errWrite := WriteConfig(h.configFilePath, body); errWrite != nil {
+		log.WithError(errWrite).Error("failed to write config")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "write_failed", "message": "failed to write config"})
 		return
 	}

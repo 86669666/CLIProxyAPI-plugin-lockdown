@@ -373,6 +373,10 @@ The empty directory argument makes Go use the system temporary directory instead
 
 This change reduces short-lived validation copies in the configuration directory. It does not replace correct system temporary-directory permissions, disk encryption, or host isolation.
 
+## Configuration file permissions
+
+Configuration updates through `PUT /v0/management/config.yaml` store the configuration file with owner-only permissions (`0600`). The parent directory is created or corrected to owner-only permissions (`0700`), and these permissions are also repaired when updating an existing file. Keep the configuration path on a protected writable volume when using the Management API.
+
 ## Upstream synchronization
 
 The documented baseline for this fork is `v7.2.80` / `09da52ad`. Re-audit the security assumptions whenever upstream changes are merged or rebased.

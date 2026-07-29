@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -25,6 +27,23 @@ const (
 )
 
 var antigravityOAuthTokenURL = "https://oauth2.googleapis.com/token"
+
+var apiCallLookupIPAddr = net.DefaultResolver.LookupIPAddr
+
+var apiCallBlockedIPPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+}
+
+type apiCallHostAllowlist map[string]struct{}
+
+type apiCallIPLookup func(context.Context, string) ([]net.IPAddr, error)
 
 type apiCallRequest struct {
 	AuthIndexSnake  *string           `json:"auth_index"`
@@ -68,7 +87,6 @@ type apiCallResponse struct {
 //     2) attributes.api_key
 //     3) metadata.token / metadata.id_token / metadata.cookie
 //     Example: {"Authorization":"Bearer $TOKEN$"}.
-//     Note: if you need to override the HTTP Host header, set header["Host"].
 //   - data (optional): Raw request body as string (useful for POST/PUT/PATCH).
 //
 // Proxy selection (highest priority first):
@@ -123,8 +141,19 @@ func (h *Handler) APICall(c *gin.Context) {
 	if reqHeaders == nil {
 		reqHeaders = map[string]string{}
 	}
+	credentialHostAllowlist := apiCallHostAllowlist(nil)
+	if auth != nil && apiCallUsesTokenPlaceholder(reqHeaders) {
+		credentialHostAllowlist = h.apiCallAllowedHosts(auth)
+		if len(credentialHostAllowlist) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "auth provider has no allowed API host"})
+			return
+		}
+	}
+	if errValidateURL := validateAPICallURL(c.Request.Context(), parsedURL, credentialHostAllowlist); errValidateURL != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "url is not allowed"})
+		return
+	}
 
-	var hostOverride string
 	var token string
 	var tokenResolved bool
 	var tokenErr error
@@ -163,19 +192,13 @@ func (h *Handler) APICall(c *gin.Context) {
 
 	for key, value := range reqHeaders {
 		if strings.EqualFold(key, "host") {
-			hostOverride = strings.TrimSpace(value)
-			continue
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Host header override is not allowed"})
+			return
 		}
 		req.Header.Set(key, value)
 	}
-	if hostOverride != "" {
-		req.Host = hostOverride
-	}
 
-	httpClient := &http.Client{
-		Timeout: defaultAPICallTimeout,
-	}
-	httpClient.Transport = h.apiCallTransport(auth)
+	httpClient := h.apiCallHTTPClient(auth, credentialHostAllowlist)
 
 	resp, errDo := httpClient.Do(req)
 	if errDo != nil {
@@ -212,6 +235,139 @@ func firstNonEmptyString(values ...*string) string {
 		}
 	}
 	return ""
+}
+
+func apiCallUsesTokenPlaceholder(headers map[string]string) bool {
+	for _, value := range headers {
+		if strings.Contains(value, "$TOKEN$") {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) apiCallHTTPClient(auth *coreauth.Auth, allowlist apiCallHostAllowlist) *http.Client {
+	return &http.Client{
+		Timeout:       defaultAPICallTimeout,
+		Transport:     h.apiCallSafeTransport(auth),
+		CheckRedirect: apiCallRedirectValidator(allowlist),
+	}
+}
+
+func apiCallRedirectValidator(allowlist apiCallHostAllowlist) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, _ []*http.Request) error {
+		return validateAPICallURL(req.Context(), req.URL, allowlist)
+	}
+}
+
+func (h *Handler) apiCallSafeTransport(auth *coreauth.Auth) http.RoundTripper {
+	transport, ok := h.apiCallTransport(auth).(*http.Transport)
+	if !ok || transport == nil {
+		return h.apiCallTransport(auth)
+	}
+	clone := transport.Clone()
+	dialer := &net.Dialer{}
+	clone.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return dialAPICallAddress(ctx, network, address, dialer, apiCallLookupIPAddr)
+	}
+	return clone
+}
+
+func dialAPICallAddress(ctx context.Context, network, address string, dialer *net.Dialer, lookup apiCallIPLookup) (net.Conn, error) {
+	host, port, errSplitHostPort := net.SplitHostPort(address)
+	if errSplitHostPort != nil {
+		return nil, fmt.Errorf("split outbound address: %w", errSplitHostPort)
+	}
+	addresses, errLookup := resolveAPICallHost(ctx, host, lookup)
+	if errLookup != nil {
+		return nil, errLookup
+	}
+	var lastErr error
+	for _, addr := range addresses {
+		conn, errDial := dialer.DialContext(ctx, network, net.JoinHostPort(addr.String(), port))
+		if errDial == nil {
+			return conn, nil
+		}
+		lastErr = errDial
+	}
+	return nil, fmt.Errorf("connect to allowed host %q: %w", host, lastErr)
+}
+
+func validateAPICallURL(ctx context.Context, parsedURL *url.URL, allowlist apiCallHostAllowlist) error {
+	return validateAPICallURLWithLookup(ctx, parsedURL, allowlist, apiCallLookupIPAddr)
+}
+
+func validateAPICallURLWithLookup(ctx context.Context, parsedURL *url.URL, allowlist apiCallHostAllowlist, lookup apiCallIPLookup) error {
+	if parsedURL == nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" || parsedURL.User != nil {
+		return fmt.Errorf("URL must be an absolute HTTP(S) URL without user info")
+	}
+	host := normalizeAPICallHost(parsedURL.Hostname())
+	if host == "" {
+		return fmt.Errorf("URL host is empty")
+	}
+	if len(allowlist) > 0 && !allowlist.allows(host) {
+		return fmt.Errorf("host %q is not in the allowlist", host)
+	}
+	_, errResolve := resolveAPICallHost(ctx, host, lookup)
+	return errResolve
+}
+
+func resolveAPICallHost(ctx context.Context, host string, lookup apiCallIPLookup) ([]netip.Addr, error) {
+	if ip, errParseIP := netip.ParseAddr(host); errParseIP == nil {
+		if !isPublicAPICallIP(ip) {
+			return nil, fmt.Errorf("IP %q is not public", host)
+		}
+		return []netip.Addr{ip.Unmap()}, nil
+	}
+	if lookup == nil {
+		return nil, fmt.Errorf("DNS resolver is unavailable")
+	}
+	resolved, errLookup := lookup(ctx, host)
+	if errLookup != nil {
+		return nil, fmt.Errorf("resolve host %q: %w", host, errLookup)
+	}
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("host %q resolved to no addresses", host)
+	}
+	addresses := make([]netip.Addr, 0, len(resolved))
+	for _, resolvedAddr := range resolved {
+		addr, ok := netip.AddrFromSlice(resolvedAddr.IP)
+		if !ok || !isPublicAPICallIP(addr) {
+			return nil, fmt.Errorf("host %q resolved to a non-public address", host)
+		}
+		addresses = append(addresses, addr.Unmap())
+	}
+	return addresses, nil
+}
+
+func isPublicAPICallIP(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	if !addr.IsValid() || !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsUnspecified() {
+		return false
+	}
+	for _, prefix := range apiCallBlockedIPPrefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
+}
+
+func (l apiCallHostAllowlist) allows(host string) bool {
+	host = normalizeAPICallHost(host)
+	if _, ok := l[host]; ok {
+		return true
+	}
+	for allowedHost := range l {
+		if strings.HasPrefix(allowedHost, ".") && strings.HasSuffix(host, allowedHost) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAPICallHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 }
 
 func tokenValueForAuth(auth *coreauth.Auth) string {
@@ -281,10 +437,7 @@ func (h *Handler) refreshAntigravityOAuthAccessToken(ctx context.Context, auth *
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	httpClient := &http.Client{
-		Timeout:   defaultAPICallTimeout,
-		Transport: h.apiCallTransport(auth),
-	}
+	httpClient := h.apiCallHTTPClient(auth, h.apiCallAllowedHosts(auth))
 	resp, errDo := httpClient.Do(req)
 	if errDo != nil {
 		return "", errDo
@@ -500,6 +653,93 @@ func (h *Handler) apiCallTransport(auth *coreauth.Auth) http.RoundTripper {
 	clone := transport.Clone()
 	clone.Proxy = nil
 	return clone
+}
+
+func (h *Handler) apiCallAllowedHosts(auth *coreauth.Auth) apiCallHostAllowlist {
+	if auth == nil {
+		return nil
+	}
+	allowlist := apiCallHostAllowlist{}
+
+	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
+	case "antigravity":
+		addAPICallAllowedHost(allowlist, "https://oauth2.googleapis.com")
+		addAPICallAllowedHost(allowlist, "https://cloudcode-pa.googleapis.com")
+		addAPICallAllowedHost(allowlist, "https://daily-cloudcode-pa.googleapis.com")
+	case "gemini", "gemini-interactions":
+		addAPICallAllowedHost(allowlist, "https://generativelanguage.googleapis.com")
+		addAPICallAllowedHost(allowlist, "https://aiplatform.googleapis.com")
+		allowlist[".aiplatform.googleapis.com"] = struct{}{}
+	case "claude":
+		addAPICallAllowedHost(allowlist, "https://api.anthropic.com")
+	case "codex":
+		addAPICallAllowedHost(allowlist, "https://chatgpt.com")
+		addAPICallAllowedHost(allowlist, "https://api.openai.com")
+	case "xai":
+		addAPICallAllowedHost(allowlist, "https://api.x.ai")
+		addAPICallAllowedHost(allowlist, "https://cli-chat-proxy.grok.com")
+	}
+
+	if h != nil && h.cfg != nil {
+		addAPICallAllowedHost(allowlist, apiCallConfiguredBaseURL(h.cfg, auth))
+	}
+	return allowlist
+}
+
+func apiCallAuthAttribute(auth *coreauth.Auth, key string) string {
+	if auth == nil || auth.Attributes == nil {
+		return ""
+	}
+	return strings.TrimSpace(auth.Attributes[key])
+}
+
+func addAPICallAllowedHost(allowlist apiCallHostAllowlist, rawURL string) {
+	if allowlist == nil {
+		return
+	}
+	parsedURL, errParseURL := url.Parse(strings.TrimSpace(rawURL))
+	if errParseURL != nil || parsedURL.Hostname() == "" {
+		return
+	}
+	allowlist[normalizeAPICallHost(parsedURL.Hostname())] = struct{}{}
+}
+
+func apiCallConfiguredBaseURL(cfg *config.Config, auth *coreauth.Auth) string {
+	if cfg == nil || auth == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
+	case "gemini":
+		if entry := resolveAPIKeyConfig(cfg.GeminiKey, auth); entry != nil {
+			return strings.TrimSpace(entry.BaseURL)
+		}
+	case "gemini-interactions":
+		if entry := resolveAPIKeyConfig(cfg.InteractionsKey, auth); entry != nil {
+			return strings.TrimSpace(entry.BaseURL)
+		}
+	case "claude":
+		if entry := resolveAPIKeyConfig(cfg.ClaudeKey, auth); entry != nil {
+			return strings.TrimSpace(entry.BaseURL)
+		}
+	case "codex":
+		if entry := resolveAPIKeyConfig(cfg.CodexKey, auth); entry != nil {
+			return strings.TrimSpace(entry.BaseURL)
+		}
+	case "xai":
+		if entry := resolveAPIKeyConfig(cfg.XAIKey, auth); entry != nil {
+			return strings.TrimSpace(entry.BaseURL)
+		}
+	}
+	for i := range cfg.OpenAICompatibility {
+		compat := &cfg.OpenAICompatibility[i]
+		if compat.Disabled {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(auth.Provider), strings.TrimSpace(compat.Name)) || strings.EqualFold(apiCallAuthAttribute(auth, "compat_name"), strings.TrimSpace(compat.Name)) || strings.EqualFold(apiCallAuthAttribute(auth, "provider_key"), strings.TrimSpace(compat.Name)) {
+			return strings.TrimSpace(compat.BaseURL)
+		}
+	}
+	return ""
 }
 
 type apiKeyConfigEntry interface {

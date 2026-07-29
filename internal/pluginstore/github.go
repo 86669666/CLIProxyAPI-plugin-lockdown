@@ -3,6 +3,7 @@ package pluginstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 const userAgent = "CLIProxyAPI"
 const maxPluginStoreRedirects = 10
+const maxPluginDownloadSize int64 = 64 << 20
 
 // HTTPDoer abstracts the HTTP client used to execute requests.
 type HTTPDoer = httpfetch.Doer
@@ -124,7 +126,7 @@ func (c Client) DownloadAsset(ctx context.Context, asset ReleaseAsset) ([]byte, 
 	if downloadURL == "" {
 		return nil, fmt.Errorf("asset %q missing download url", asset.Name)
 	}
-	return c.get(ctx, downloadURL, "application/octet-stream", RequestKindArtifact, 0)
+	return c.get(ctx, downloadURL, "application/octet-stream", RequestKindArtifact, maxPluginDownloadSize)
 }
 
 func (c Client) releaseAssetAPIAuthenticated(apiURL string) bool {
@@ -250,18 +252,29 @@ func readPluginStoreResponse(resp *http.Response, maxSize int64) ([]byte, error)
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
+	if maxSize > 0 && resp.ContentLength > maxSize {
+		return nil, responseSizeLimitError(maxSize)
+	}
 	reader := io.Reader(resp.Body)
 	if maxSize > 0 {
-		reader = io.LimitReader(resp.Body, maxSize+1)
+		reader = io.LimitReader(http.MaxBytesReader(nil, resp.Body, maxSize), maxSize+1)
 	}
 	data, errRead := io.ReadAll(reader)
 	if errRead != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(errRead, &maxBytesError) {
+			return nil, responseSizeLimitError(maxSize)
+		}
 		return nil, fmt.Errorf("read response: %w", errRead)
 	}
 	if maxSize > 0 && int64(len(data)) > maxSize {
-		return nil, fmt.Errorf("response exceeds maximum allowed size of %d bytes", maxSize)
+		return nil, responseSizeLimitError(maxSize)
 	}
 	return data, nil
+}
+
+func responseSizeLimitError(maxSize int64) error {
+	return fmt.Errorf("response exceeds maximum allowed size of %d bytes", maxSize)
 }
 
 func SelectReleaseAssets(release Release, id, version, goos, goarch string) (ReleaseAsset, ReleaseAsset, error) {

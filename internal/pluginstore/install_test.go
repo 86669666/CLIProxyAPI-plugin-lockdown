@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -622,6 +623,55 @@ func TestInstallDirectRejectsChecksumMismatch(t *testing.T) {
 	}
 }
 
+func TestDownloadAssetRejectsDeclaredSizeOverGlobalLimit(t *testing.T) {
+	t.Parallel()
+
+	body := &trackingReadCloser{data: []byte("not-read")}
+	client := Client{HTTPClient: singleResponseHTTPDoer{
+		body:          body,
+		contentLength: maxPluginDownloadSize + 1,
+	}}
+	_, errDownload := client.DownloadAsset(context.Background(), ReleaseAsset{
+		Name:               "sample-provider.zip",
+		BrowserDownloadURL: "https://downloads.example/sample-provider.zip",
+	})
+	if errDownload == nil {
+		t.Fatal("DownloadAsset() error = nil")
+	}
+	if !strings.Contains(errDownload.Error(), "maximum allowed size") {
+		t.Fatalf("DownloadAsset() error = %v, want size limit", errDownload)
+	}
+	if body.offset != 0 {
+		t.Fatalf("download read %d bytes, want 0", body.offset)
+	}
+}
+
+func TestDownloadArtifactAppliesGlobalLimitWithoutDeclaredSize(t *testing.T) {
+	t.Parallel()
+
+	body := &trackingReadCloser{data: []byte("not-read")}
+	client := Client{HTTPClient: singleResponseHTTPDoer{
+		body:          body,
+		contentLength: maxPluginDownloadSize + 1,
+	}}
+	sum := sha256.Sum256(nil)
+	_, errDownload := client.DownloadArtifact(context.Background(), Artifact{
+		GOOS:   "linux",
+		GOARCH: "amd64",
+		URL:    "https://downloads.example/sample-provider.zip",
+		SHA256: hex.EncodeToString(sum[:]),
+	})
+	if errDownload == nil {
+		t.Fatal("DownloadArtifact() error = nil")
+	}
+	if !strings.Contains(errDownload.Error(), "maximum allowed size") {
+		t.Fatalf("DownloadArtifact() error = %v, want size limit", errDownload)
+	}
+	if body.offset != 0 {
+		t.Fatalf("download read %d bytes, want 0", body.offset)
+	}
+}
+
 func TestDownloadArtifactEnforcesDeclaredSizeDuringRead(t *testing.T) {
 	t.Parallel()
 
@@ -643,6 +693,57 @@ func TestDownloadArtifactEnforcesDeclaredSizeDuringRead(t *testing.T) {
 	}
 	if body.offset > 5 {
 		t.Fatalf("download read %d bytes, want at most size+1", body.offset)
+	}
+}
+
+func TestInstallArchiveRejectsOversizedExtractedArchive(t *testing.T) {
+	t.Parallel()
+
+	archiveData := makeZip(t, map[string]string{"sample-provider.so": "library-data"})
+	centralDirectory := bytes.Index(archiveData, []byte{'P', 'K', 1, 2})
+	if centralDirectory < 0 {
+		t.Fatal("zip central directory not found")
+	}
+	binary.LittleEndian.PutUint32(archiveData[centralDirectory+24:], uint32(maxPluginExtractedSize+1))
+
+	_, errInstall := InstallArchive(archiveData, testPlugin(), InstallOptions{
+		PluginsDir: t.TempDir(),
+		GOOS:       "linux",
+		GOARCH:     "amd64",
+	})
+	if errInstall == nil {
+		t.Fatal("InstallArchive() error = nil")
+	}
+	if !strings.Contains(errInstall.Error(), "maximum extracted size") {
+		t.Fatalf("InstallArchive() error = %v, want extracted size limit", errInstall)
+	}
+}
+
+func TestReadPluginArchiveEntryEnforcesActualSize(t *testing.T) {
+	t.Parallel()
+
+	body := &trackingReadCloser{data: []byte("0123456789")}
+	_, errRead := readPluginArchiveEntry(body, "sample-provider.so", 4)
+	if errRead == nil {
+		t.Fatal("readPluginArchiveEntry() error = nil")
+	}
+	if !strings.Contains(errRead.Error(), "maximum extracted size") {
+		t.Fatalf("readPluginArchiveEntry() error = %v, want extracted size limit", errRead)
+	}
+	if body.offset > 5 {
+		t.Fatalf("archive read %d bytes, want at most size+1", body.offset)
+	}
+}
+
+func TestReadPluginArchiveEntryAllowsExactLimit(t *testing.T) {
+	t.Parallel()
+
+	data, errRead := readPluginArchiveEntry(strings.NewReader("1234"), "sample-provider.so", 4)
+	if errRead != nil {
+		t.Fatalf("readPluginArchiveEntry() error = %v", errRead)
+	}
+	if string(data) != "1234" {
+		t.Fatalf("readPluginArchiveEntry() = %q, want exact limit data", data)
 	}
 }
 
@@ -718,15 +819,17 @@ type authCheckingHTTPDoer struct {
 }
 
 type singleResponseHTTPDoer struct {
-	body io.ReadCloser
+	body          io.ReadCloser
+	contentLength int64
 }
 
 func (c singleResponseHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 	return &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       c.body,
-		Header:     make(http.Header),
-		Request:    req,
+		StatusCode:    http.StatusOK,
+		Body:          c.body,
+		ContentLength: c.contentLength,
+		Header:        make(http.Header),
+		Request:       req,
 	}, nil
 }
 

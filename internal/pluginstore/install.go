@@ -34,6 +34,8 @@ type InstallOptions struct {
 // library that is loaded by the running process on Windows.
 var ErrLoadedPluginLocked = errors.New("loaded plugin library cannot be overwritten while the server is running")
 
+const maxPluginExtractedSize int64 = 64 << 20
+
 type InstallResult struct {
 	ID          string `json:"id"`
 	Version     string `json:"version"`
@@ -319,6 +321,7 @@ func readTargetLibrary(reader *zip.Reader, id string, version string, goos strin
 	targetName := strings.TrimSpace(id) + pluginExtension(goos)
 	versionedTargetName := versionedPluginFileName(id, version, goos)
 	var target *zip.File
+	var extractedSize uint64
 	for _, file := range reader.File {
 		cleanedName, errClean := cleanZipName(file.Name)
 		if errClean != nil {
@@ -330,6 +333,10 @@ func readTargetLibrary(reader *zip.Reader, id string, version string, goos strin
 		if !regularZipFile(file) {
 			return nil, 0, fmt.Errorf("zip entry %s is not a regular file", file.Name)
 		}
+		if file.UncompressedSize64 > uint64(maxPluginExtractedSize)-extractedSize {
+			return nil, 0, fmt.Errorf("zip exceeds maximum extracted size of %d bytes", maxPluginExtractedSize)
+		}
+		extractedSize += file.UncompressedSize64
 		if !hasDynamicLibraryExtension(cleanedName) {
 			continue
 		}
@@ -357,15 +364,26 @@ func readTargetLibrary(reader *zip.Reader, id string, version string, goos strin
 			log.WithError(errClose).Debug("failed to close plugin archive entry")
 		}
 	}()
-	data, errRead := io.ReadAll(handle)
+	data, errRead := readPluginArchiveEntry(handle, targetName, maxPluginExtractedSize)
 	if errRead != nil {
-		return nil, 0, fmt.Errorf("read %s: %w", targetName, errRead)
+		return nil, 0, errRead
 	}
 	mode := target.FileInfo().Mode().Perm()
 	if mode == 0 {
 		mode = 0o755
 	}
 	return data, mode, nil
+}
+
+func readPluginArchiveEntry(reader io.Reader, name string, maxSize int64) ([]byte, error) {
+	data, errRead := io.ReadAll(io.LimitReader(reader, maxSize+1))
+	if errRead != nil {
+		return nil, fmt.Errorf("read %s: %w", name, errRead)
+	}
+	if int64(len(data)) > maxSize {
+		return nil, fmt.Errorf("%s exceeds maximum extracted size of %d bytes", name, maxSize)
+	}
+	return data, nil
 }
 
 func versionedPluginFileName(id string, version string, goos string) string {
