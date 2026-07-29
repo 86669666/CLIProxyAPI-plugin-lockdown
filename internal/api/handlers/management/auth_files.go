@@ -718,14 +718,25 @@ func (h *Handler) DownloadAuthFile(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "name must end with .json"})
 		return
 	}
-	full := filepath.Join(h.cfg.AuthDir, name)
-	data, err := os.ReadFile(full)
-	if err != nil {
-		if os.IsNotExist(err) {
+	file, errOpen := safeOpenBeneath(h.cfg.AuthDir, name)
+	if errOpen != nil {
+		if errors.Is(errOpen, errUnsafeFilePath) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid name"})
+		} else if os.IsNotExist(errOpen) {
 			c.JSON(404, gin.H{"error": "file not found"})
 		} else {
-			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read file: %v", err)})
+			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read file: %v", errOpen)})
 		}
+		return
+	}
+	defer func() {
+		if errClose := file.Close(); errClose != nil {
+			log.WithError(errClose).Error("close downloaded auth file")
+		}
+	}()
+	data, errRead := io.ReadAll(file)
+	if errRead != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read file: %v", errRead)})
 		return
 	}
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", name))

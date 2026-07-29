@@ -734,3 +734,52 @@ func appendMainLog(t *testing.T, dir, content string) {
 		t.Fatalf("close main log: %v", errClose)
 	}
 }
+
+func TestGetRequestLogByIDRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret.log")
+	if err := os.WriteFile(secret, []byte("must not be downloaded\n"), 0o600); err != nil {
+		t.Fatalf("write secret log: %v", err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, "request-request-id.log")); err != nil {
+		t.Skipf("create symbolic link: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/request-log-by-id/request-id", nil)
+	ctx.Params = gin.Params{{Key: "id", Value: "request-id"}}
+	newLogsTestHandler(dir, true).GetRequestLogByID(ctx)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "must not be downloaded") {
+		t.Fatal("download response exposed the symlink target")
+	}
+}
+
+func TestDownloadRequestErrorLogRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret.log")
+	if err := os.WriteFile(secret, []byte("must not be downloaded\n"), 0o600); err != nil {
+		t.Fatalf("write secret log: %v", err)
+	}
+	name := "error-request-id.log"
+	if err := os.Symlink(secret, filepath.Join(dir, name)); err != nil {
+		t.Skipf("create symbolic link: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/request-error-logs/"+name, nil)
+	ctx.Params = gin.Params{{Key: "name", Value: name}}
+	newLogsTestHandler(dir, true).DownloadRequestErrorLog(ctx)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "must not be downloaded") {
+		t.Fatal("download response exposed the symlink target")
+	}
+}
