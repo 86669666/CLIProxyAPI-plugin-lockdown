@@ -211,9 +211,6 @@ func (h *Handler) GetPluginConfig(c *gin.Context) {
 
 // PatchPluginEnabled updates plugins.configs.<id>.enabled without touching plugins.enabled.
 func (h *Handler) PatchPluginEnabled(c *gin.Context) {
-	if rejectDisabledPluginCapability(c) {
-		return
-	}
 	id, okID := pluginIDFromRequest(c)
 	if !okID {
 		return
@@ -250,9 +247,6 @@ func (h *Handler) PatchPluginEnabled(c *gin.Context) {
 
 // PutPluginConfig replaces plugins.configs.<id> with the request object.
 func (h *Handler) PutPluginConfig(c *gin.Context) {
-	if rejectDisabledPluginCapability(c) {
-		return
-	}
 	id, okID := pluginIDFromRequest(c)
 	if !okID {
 		return
@@ -281,9 +275,6 @@ func (h *Handler) PutPluginConfig(c *gin.Context) {
 
 // PatchPluginConfig shallow-merges plugins.configs.<id> with the request object.
 func (h *Handler) PatchPluginConfig(c *gin.Context) {
-	if rejectDisabledPluginCapability(c) {
-		return
-	}
 	id, okID := pluginIDFromRequest(c)
 	if !okID {
 		return

@@ -9,8 +9,16 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 )
+
+func runPluginPolicyHandler(c *gin.Context, handler gin.HandlerFunc) {
+	middleware.PluginCapabilityMiddleware()(c)
+	if !c.IsAborted() {
+		handler(c)
+	}
+}
 
 func TestPluginStoreHandlersRejectDisablePolicyBeforeAccess(t *testing.T) {
 	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
@@ -27,7 +35,7 @@ func TestPluginStoreHandlersRejectDisablePolicyBeforeAccess(t *testing.T) {
 		c, _ := gin.CreateTestContext(rec)
 		c.Params = gin.Params{{Key: "id", Value: "sample"}}
 		c.Request = httptest.NewRequest(tt.method, tt.path, nil)
-		tt.call(c)
+		runPluginPolicyHandler(c, tt.call)
 		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "plugin_capability_disabled") {
 			t.Fatalf("status/body = %d %s, want policy rejection", rec.Code, rec.Body.String())
 		}
@@ -52,7 +60,7 @@ func TestPluginMutationHandlersRejectDisablePolicy(t *testing.T) {
 		c.Params = gin.Params{{Key: "id", Value: "sample"}}
 		c.Request = httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
 		c.Request.Header.Set("Content-Type", "application/json")
-		tt.call(c)
+		runPluginPolicyHandler(c, tt.call)
 		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "plugin_capability_disabled") {
 			t.Fatalf("status/body = %d %s, want policy rejection", rec.Code, rec.Body.String())
 		}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
@@ -185,17 +186,12 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_yaml", "message": err.Error()})
 		return
 	}
-	disabled, errPolicy := config.PluginsDisabledByPolicy()
-	if errPolicy != nil {
-		log.WithError(errPolicy).Error("invalid plugin lockdown policy")
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "invalid_plugin_policy",
-			"message": "plugin lockdown policy is invalid",
-		})
+	disabled, proceed := middleware.PluginCapabilityDisabledByPolicy(c)
+	if !proceed {
 		return
 	}
 	if disabled && pluginConfigRequestsEnable(&cfg) {
-		rejectDisabledPluginCapability(c)
+		middleware.RejectPluginCapability(c)
 		return
 	}
 	// Validate config using LoadConfigOptional with optional=false to enforce parsing
