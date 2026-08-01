@@ -203,6 +203,10 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 	if errContext := ctx.Err(); errContext != nil {
 		return
 	}
+	if config.PluginsDisabledByPolicy() {
+		h.clearPluginCapabilities(cfg)
+		return
+	}
 
 	rc, errRuntimeConfig := runtimeConfigFromConfig(cfg)
 	if errRuntimeConfig != nil {
@@ -214,13 +218,7 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 	h.mu.Unlock()
 
 	if !rc.Enabled {
-		h.mu.Lock()
-		h.managementRoutes = make(map[string]managementRouteRecord)
-		h.resourceRoutes = make(map[string]resourceRouteRecord)
-		h.rebuildActivePluginMapsLocked(nil)
-		h.snapshot.Store(emptySnapshot())
-		h.mu.Unlock()
-		h.refreshThinkingProviders(nil)
+		h.clearPluginCapabilities(cfg)
 		return
 	}
 
@@ -369,6 +367,19 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 			log.Warnf("pluginhost: failed to clean old plugin files: %v", errCleanup)
 		}
 	}
+}
+
+func (h *Host) clearPluginCapabilities(cfg *config.Config) {
+	h.mu.Lock()
+	h.runtimeConfig = cfg
+	h.managementRoutes = make(map[string]managementRouteRecord)
+	h.resourceRoutes = make(map[string]resourceRouteRecord)
+	h.commandLineFlags = make(map[string]commandLineFlagRecord)
+	h.commandLineHits = make(map[string]struct{})
+	h.rebuildActivePluginMapsLocked(nil)
+	h.snapshot.Store(emptySnapshot())
+	h.mu.Unlock()
+	h.refreshThinkingProviders(nil)
 }
 
 func (h *Host) startPluginLoad(ctx context.Context, file pluginFile, item runtimeItemConfig, request *pluginLoadRequest) {

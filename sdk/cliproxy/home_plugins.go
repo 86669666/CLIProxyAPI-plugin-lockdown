@@ -14,6 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/homeplugins"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginpolicy"
 	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
@@ -45,10 +46,16 @@ type homePluginFinalization struct {
 }
 
 func (s *Service) syncHomePlugins(ctx context.Context, cfg *config.Config) (homeplugins.SyncReport, string, bool, error) {
+	if config.PluginsDisabledByPolicy() {
+		return homeplugins.CompletedSyncReport(homeplugins.CurrentPlatform(), pluginpolicy.ErrDisabled), "", false, pluginpolicy.ErrDisabled
+	}
 	return s.syncHomePluginsWithClient(ctx, cfg, nil)
 }
 
 func (s *Service) syncHomePluginsWithClient(ctx context.Context, cfg *config.Config, client *home.Client) (homeplugins.SyncReport, string, bool, error) {
+	if config.PluginsDisabledByPolicy() {
+		return homeplugins.CompletedSyncReport(homeplugins.CurrentPlatform(), pluginpolicy.ErrDisabled), "", false, pluginpolicy.ErrDisabled
+	}
 	if s == nil || cfg == nil || !cfg.Home.Enabled {
 		return homeplugins.SyncReport{}, "", false, nil
 	}

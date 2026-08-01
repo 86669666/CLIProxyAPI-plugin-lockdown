@@ -72,6 +72,13 @@ func shouldEnableExampleAPIKeySafeMode(cfg *config.Config, commandMode, tuiMode,
 func main() {
 	fmt.Printf("CLIProxyAPI Version: %s, Commit: %s, BuiltAt: %s\n", buildinfo.Version, buildinfo.Commit, buildinfo.BuildDate)
 
+	wd, errGetwd := os.Getwd()
+	if errGetwd != nil {
+		log.Errorf("failed to get working directory: %v", errGetwd)
+		return
+	}
+	loadDotEnv(wd)
+
 	// Command-line flags to control the application's behavior.
 	var codexLogin bool
 	var codexDeviceLogin bool
@@ -176,19 +183,6 @@ func main() {
 		objectStoreLocalPath string
 		objectStoreInst      *store.ObjectTokenStore
 	)
-
-	wd, err := os.Getwd()
-	if err != nil {
-		log.Errorf("failed to get working directory: %v", err)
-		return
-	}
-
-	// Load environment variables from .env if present.
-	if errLoad := godotenv.Load(filepath.Join(wd, ".env")); errLoad != nil {
-		if !errors.Is(errLoad, os.ErrNotExist) {
-			log.WithError(errLoad).Warn("failed to load .env file")
-		}
-	}
 
 	lookupEnv := func(keys ...string) (string, bool) {
 		for _, key := range keys {
@@ -743,6 +737,14 @@ func main() {
 			misc.StartAntigravityVersionUpdater(context.Background())
 			startModelCatalogUpdaters(localModel, cfg.Home.Enabled)
 			cmd.StartServiceWithPluginHost(cfg, configFilePath, password, pluginHost, serverOptions...)
+		}
+	}
+}
+
+func loadDotEnv(wd string) {
+	if errLoad := godotenv.Load(filepath.Join(wd, ".env")); errLoad != nil {
+		if !errors.Is(errLoad, os.ErrNotExist) {
+			log.WithError(errLoad).Warn("failed to load .env file")
 		}
 	}
 }

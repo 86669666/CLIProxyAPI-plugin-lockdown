@@ -99,8 +99,10 @@ func TestSyncHomePluginsFallsBackForUnsupportedHomeProtocol(t *testing.T) {
 }
 
 func TestSyncHomePluginsSkipsFetchWhenPluginsDisabled(t *testing.T) {
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
 	cfg := &config.Config{}
 	cfg.Home.Enabled = true
+	cfg.Plugins.Enabled = true
 	cfg.Plugins.Configs = map[string]config.PluginInstanceConfig{}
 	fetchCalls := 0
 	service := &Service{homePluginSyncFetch: func(context.Context, sdkpluginstore.PluginSyncRequest) (sdkpluginstore.PluginSyncResponse, error) {
@@ -109,14 +111,14 @@ func TestSyncHomePluginsSkipsFetchWhenPluginsDisabled(t *testing.T) {
 	}}
 
 	report, key, didSync, errSync := service.syncHomePlugins(context.Background(), cfg)
-	if errSync != nil {
-		t.Fatalf("syncHomePlugins() error = %v", errSync)
+	if !errors.Is(errSync, sdkpluginstore.ErrPluginsDisabled) {
+		t.Fatalf("syncHomePlugins() error = %v, want ErrPluginsDisabled", errSync)
 	}
 	if didSync || fetchCalls != 0 {
 		t.Fatalf("syncHomePlugins() didSync=%v fetchCalls=%d, want disabled skip", didSync, fetchCalls)
 	}
-	if key == "" || report.Task != "plugin-sync" || !report.OK {
-		t.Fatalf("disabled sync key/report = %q/%#v, want reportable disabled status", key, report)
+	if key != "" || report.Task != "plugin-sync" || report.OK {
+		t.Fatalf("disabled sync key/report = %q/%#v, want rejected disabled status", key, report)
 	}
 	if service.homePluginSyncKey != "" {
 		t.Fatalf("homePluginSyncKey = %q, want caller to mark after reporting", service.homePluginSyncKey)

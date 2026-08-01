@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginpolicy"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 	log "github.com/sirupsen/logrus"
@@ -910,9 +911,12 @@ func (cfg *Config) NormalizePluginsConfig() {
 
 // PluginsDisabledByPolicy reports whether the process-wide plugin lockdown is enabled.
 func PluginsDisabledByPolicy() bool {
-	raw := strings.TrimSpace(os.Getenv("CLIPROXY_DISABLE_PLUGINS"))
-	disabled, err := strconv.ParseBool(raw)
-	return err == nil && disabled
+	return pluginpolicy.Disabled()
+}
+
+// ParsePluginsDisabledPolicy parses the process-wide plugin lockdown value.
+func ParsePluginsDisabledPolicy(raw string) (bool, error) {
+	return pluginpolicy.ParseDisabled(raw)
 }
 
 func setPluginRawEnabled(node *yaml.Node, enabled bool) {

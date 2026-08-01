@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
@@ -25,6 +26,13 @@ type commandLineFlagRecord struct {
 // RegisterCommandLineFlags exposes plugin-declared flags on the provided FlagSet.
 func (h *Host) RegisterCommandLineFlags(ctx context.Context, flagSet *flag.FlagSet) {
 	if h == nil || flagSet == nil {
+		return
+	}
+	if config.PluginsDisabledByPolicy() {
+		h.mu.Lock()
+		h.commandLineFlags = make(map[string]commandLineFlagRecord)
+		h.commandLineHits = make(map[string]struct{})
+		h.mu.Unlock()
 		return
 	}
 
@@ -229,6 +237,9 @@ func (h *Host) HasTriggeredCommandLineFlags() bool {
 	if h == nil {
 		return false
 	}
+	if config.PluginsDisabledByPolicy() {
+		return false
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.commandLineHits) > 0
@@ -237,6 +248,9 @@ func (h *Host) HasTriggeredCommandLineFlags() bool {
 // ExecuteCommandLine runs all enabled plugins whose command-line flags were provided.
 func (h *Host) ExecuteCommandLine(ctx context.Context, program string, args []string, configPath string, flagSet *flag.FlagSet) (int, bool) {
 	if h == nil {
+		return 0, false
+	}
+	if config.PluginsDisabledByPolicy() {
 		return 0, false
 	}
 

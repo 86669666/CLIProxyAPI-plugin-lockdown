@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginpolicy"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
@@ -110,20 +111,32 @@ func NormalizePlatform(platform Platform) Platform {
 }
 
 func Sync(ctx context.Context, cfg *config.Config, pluginRuntime PluginRuntime) error {
+	if config.PluginsDisabledByPolicy() {
+		return pluginpolicy.ErrDisabled
+	}
 	_, errSync := SyncPlatformWithReport(ctx, cfg, pluginRuntime, CurrentPlatform())
 	return errSync
 }
 
 func SyncPlatform(ctx context.Context, cfg *config.Config, pluginRuntime PluginRuntime, platform Platform) error {
+	if config.PluginsDisabledByPolicy() {
+		return pluginpolicy.ErrDisabled
+	}
 	_, errSync := SyncPlatformWithReport(ctx, cfg, pluginRuntime, platform)
 	return errSync
 }
 
 func SyncWithReport(ctx context.Context, cfg *config.Config, pluginRuntime PluginRuntime) (SyncReport, error) {
+	if config.PluginsDisabledByPolicy() {
+		return disabledSyncReport(CurrentPlatform())
+	}
 	return SyncPlatformWithReport(ctx, cfg, pluginRuntime, CurrentPlatform())
 }
 
 func SyncPlatformWithReport(ctx context.Context, cfg *config.Config, pluginRuntime PluginRuntime, platform Platform) (SyncReport, error) {
+	if config.PluginsDisabledByPolicy() {
+		return disabledSyncReport(platform)
+	}
 	if cfg == nil || !cfg.Home.Enabled || !cfg.Plugins.Enabled {
 		return newSyncReport(platform), nil
 	}
@@ -202,6 +215,9 @@ func SyncResolvedWithReport(ctx context.Context, cfg *config.Config, items []sdk
 			items[index].Clear()
 		}
 	}()
+	if config.PluginsDisabledByPolicy() {
+		return disabledSyncReport(CurrentPlatform())
+	}
 	platform := NormalizePlatform(CurrentPlatform())
 	report := newSyncReport(platform)
 	if cfg == nil || !cfg.Home.Enabled || !cfg.Plugins.Enabled {
@@ -247,6 +263,12 @@ func SyncResolvedWithReport(ctx context.Context, cfg *config.Config, items []sdk
 	errSync := errors.Join(syncErrors...)
 	finishReport(&report, errSync)
 	return report, errSync
+}
+
+func disabledSyncReport(platform Platform) (SyncReport, error) {
+	report := newSyncReport(NormalizePlatform(platform))
+	finishReport(&report, pluginpolicy.ErrDisabled)
+	return report, pluginpolicy.ErrDisabled
 }
 
 func addInstalledVersionStatuses(report *SyncReport, cfg *config.Config, root string, installedVersions map[string]string) {

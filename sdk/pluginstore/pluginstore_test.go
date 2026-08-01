@@ -1,9 +1,40 @@
 package pluginstore
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 )
+
+func TestInstallEntrypointsRejectWhenPluginsDisabled(t *testing.T) {
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	client := Client{}
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "install", call: func() error {
+			_, errInstall := client.Install(context.Background(), Plugin{}, InstallOptions{})
+			return errInstall
+		}},
+		{name: "install version", call: func() error {
+			_, errInstall := client.InstallVersion(context.Background(), Plugin{}, "", "", InstallOptions{})
+			return errInstall
+		}},
+		{name: "install manifest", call: func() error {
+			_, errInstall := client.InstallManifest(context.Background(), Manifest{}, InstallOptions{})
+			return errInstall
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if errInstall := tt.call(); !errors.Is(errInstall, ErrPluginsDisabled) {
+				t.Fatalf("install error = %v, want ErrPluginsDisabled", errInstall)
+			}
+		})
+	}
+}
 
 func TestManifestValidateRequiresPinnedReleaseTag(t *testing.T) {
 	manifest := validTestManifest()
