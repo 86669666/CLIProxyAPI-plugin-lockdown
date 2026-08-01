@@ -1,10 +1,49 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 )
+
+func TestLoadDotEnvBeforePluginBootstrap(t *testing.T) {
+	const key = "CLIPROXY_DISABLE_PLUGINS"
+	oldValue, hadValue := os.LookupEnv(key)
+	if errUnset := os.Unsetenv(key); errUnset != nil {
+		t.Fatalf("Unsetenv() error = %v", errUnset)
+	}
+	t.Cleanup(func() {
+		if hadValue {
+			_ = os.Setenv(key, oldValue)
+			return
+		}
+		_ = os.Unsetenv(key)
+	})
+	dir := t.TempDir()
+	if errWrite := os.WriteFile(filepath.Join(dir, ".env"), []byte(key+"=true\n"), 0o600); errWrite != nil {
+		t.Fatalf("WriteFile(.env) error = %v", errWrite)
+	}
+
+	loadDotEnv(dir)
+	if !config.PluginsDisabledByPolicy() {
+		t.Fatal("plugin policy did not observe .env value")
+	}
+}
+
+func TestComposeFilesForcePluginLockdown(t *testing.T) {
+	for _, name := range []string{"docker-compose.yml", "docker-compose.cluster.yml"} {
+		raw, errRead := os.ReadFile(filepath.Join("..", "..", name))
+		if errRead != nil {
+			t.Fatalf("ReadFile(%s) error = %v", name, errRead)
+		}
+		if !strings.Contains(string(raw), "CLIPROXY_DISABLE_PLUGINS: \"true\"") {
+			t.Fatalf("%s does not force CLIPROXY_DISABLE_PLUGINS to true", name)
+		}
+	}
+}
 
 func TestShouldEnableExampleAPIKeySafeMode(t *testing.T) {
 	cfgWithExampleKey := &config.Config{

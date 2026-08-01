@@ -62,6 +62,26 @@ func TestRegisterCommandLineFlagsSkipsNativeAndUsesPriority(t *testing.T) {
 	}
 }
 
+func TestCommandLinePolicySkipsRegistrationAndExecution(t *testing.T) {
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	flagSet := flag.NewFlagSet("test", flag.ContinueOnError)
+	flagSet.SetOutput(&bytes.Buffer{})
+	plugin := &commandLinePluginDouble{flags: []pluginapi.CommandLineFlag{{Name: "plugin-command", Type: "bool"}}}
+	host := newHostWithRecords(capabilityRecord{
+		id:     "alpha",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{CommandLinePlugin: plugin}},
+	})
+
+	host.RegisterCommandLineFlags(context.Background(), flagSet)
+	if flagSet.Lookup("plugin-command") != nil {
+		t.Fatal("plugin command-line flag registered under policy")
+	}
+	exitCode, handled := host.ExecuteCommandLine(context.Background(), "cliproxy", nil, "", flagSet)
+	if exitCode != 0 || handled || len(plugin.execRequests) != 0 {
+		t.Fatalf("ExecuteCommandLine() = (%d, %v), calls=%d; want (0, false), 0", exitCode, handled, len(plugin.execRequests))
+	}
+}
+
 func TestExecuteCommandLinePassesAllArgsAndTriggeredFlags(t *testing.T) {
 	flagSet := flag.NewFlagSet("test", flag.ContinueOnError)
 	flagSet.SetOutput(&bytes.Buffer{})

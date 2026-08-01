@@ -157,6 +157,44 @@ func TestSyncResolvedWithReportUsesTemporaryAuthAndClearsIt(t *testing.T) {
 	}
 }
 
+func TestSyncEntrypointsPolicyAvoidsFetchAndInstall(t *testing.T) {
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	enabled := true
+	cfg := &config.Config{
+		Home: config.HomeConfig{Enabled: true},
+		Plugins: config.PluginsConfig{
+			Enabled: true,
+			Dir:     t.TempDir(),
+			Configs: map[string]config.PluginInstanceConfig{"sample": {Enabled: &enabled}},
+		},
+	}
+	clientCalls := 0
+	originalClient := newPluginStoreClient
+	originalResolvedClient := newResolvedPluginStoreClient
+	newPluginStoreClient = func(*config.Config) sdkpluginstore.Client {
+		clientCalls++
+		return sdkpluginstore.Client{}
+	}
+	newResolvedPluginStoreClient = func(*config.Config, []sdkpluginstore.ResolvedAuthConfig, time.Time) sdkpluginstore.Client {
+		clientCalls++
+		return sdkpluginstore.Client{}
+	}
+	defer func() {
+		newPluginStoreClient = originalClient
+		newResolvedPluginStoreClient = originalResolvedClient
+	}()
+
+	if _, errSync := SyncPlatformWithReport(context.Background(), cfg, nil, CurrentPlatform()); !errors.Is(errSync, sdkpluginstore.ErrPluginsDisabled) {
+		t.Fatalf("SyncPlatformWithReport() error = %v, want ErrPluginsDisabled", errSync)
+	}
+	if _, errSync := SyncResolvedWithReport(context.Background(), cfg, nil, time.Now().Add(time.Minute), nil, nil); !errors.Is(errSync, sdkpluginstore.ErrPluginsDisabled) {
+		t.Fatalf("SyncResolvedWithReport() error = %v, want ErrPluginsDisabled", errSync)
+	}
+	if clientCalls != 0 {
+		t.Fatalf("plugin store client calls = %d, want 0 under policy", clientCalls)
+	}
+}
+
 func TestSyncResolvedWithReportIncludesUnchangedInstalledPlugins(t *testing.T) {
 	root := t.TempDir()
 	target := pluginTestPath(root, runtime.GOOS, runtime.GOARCH, "sample", "1.0.0")

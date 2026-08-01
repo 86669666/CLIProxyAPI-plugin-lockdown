@@ -1,9 +1,11 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginpolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,9 +33,32 @@ func TestNormalizePluginsConfigDisablePolicyForcesRuntimeOff(t *testing.T) {
 	}
 }
 
-func TestPluginsDisabledByPolicyInvalidValueDoesNotDisable(t *testing.T) {
+func TestPluginsDisabledByPolicyInvalidValueFailsClosed(t *testing.T) {
 	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "not-a-bool")
-	if PluginsDisabledByPolicy() {
-		t.Fatal("PluginsDisabledByPolicy() = true for invalid value")
+	if !PluginsDisabledByPolicy() {
+		t.Fatal("PluginsDisabledByPolicy() = false for invalid value")
+	}
+	disabled, errPolicy := ParsePluginsDisabledPolicy("not-a-bool")
+	if !disabled || !errors.Is(errPolicy, pluginpolicy.ErrInvalidValue) {
+		t.Fatalf("ParsePluginsDisabledPolicy() = (%v, %v), want true and ErrInvalidValue", disabled, errPolicy)
+	}
+}
+
+func TestParsePluginsDisabledPolicyBoolValues(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want bool
+	}{
+		{raw: "", want: false},
+		{raw: "false", want: false},
+		{raw: "0", want: false},
+		{raw: "true", want: true},
+		{raw: "1", want: true},
+	}
+	for _, tt := range tests {
+		disabled, errPolicy := ParsePluginsDisabledPolicy(tt.raw)
+		if errPolicy != nil || disabled != tt.want {
+			t.Fatalf("ParsePluginsDisabledPolicy(%q) = (%v, %v), want (%v, nil)", tt.raw, disabled, errPolicy, tt.want)
+		}
 	}
 }

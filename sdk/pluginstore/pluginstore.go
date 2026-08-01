@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginpolicy"
 	internalpluginstore "github.com/router-for-me/CLIProxyAPI/v7/internal/pluginstore"
 )
 
@@ -57,7 +58,10 @@ type HTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-var ErrLoadedPluginLocked = internalpluginstore.ErrLoadedPluginLocked
+var (
+	ErrLoadedPluginLocked = internalpluginstore.ErrLoadedPluginLocked
+	ErrPluginsDisabled    = pluginpolicy.ErrDisabled
+)
 
 type Client struct {
 	inner internalpluginstore.Client
@@ -189,13 +193,22 @@ func (c Client) FetchReleaseByTag(ctx context.Context, plugin Plugin, tag string
 }
 
 func (c Client) Install(ctx context.Context, plugin Plugin, options InstallOptions) (InstallResult, error) {
+	if pluginpolicy.Disabled() {
+		return InstallResult{}, ErrPluginsDisabled
+	}
 	return c.inner.Install(ctx, plugin, options)
 }
 
 func (c Client) InstallVersion(ctx context.Context, plugin Plugin, releaseTag string, version string, options InstallOptions) (InstallResult, error) {
+	if pluginpolicy.Disabled() {
+		return InstallResult{}, ErrPluginsDisabled
+	}
 	return c.inner.InstallVersion(ctx, plugin, releaseTag, version, options)
 }
 
 func (c Client) InstallManifest(ctx context.Context, manifest Manifest, options InstallOptions) (InstallResult, error) {
+	if pluginpolicy.Disabled() {
+		return InstallResult{}, ErrPluginsDisabled
+	}
 	return c.inner.InstallManifest(ctx, manifest, options)
 }

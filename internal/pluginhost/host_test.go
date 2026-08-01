@@ -50,6 +50,27 @@ func TestHostApplyConfig_DisabledGlobalSkipsSnapshot(t *testing.T) {
 	}
 }
 
+func TestHostApplyConfig_PolicySkipsEnabledLoader(t *testing.T) {
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	loader := newTestSymbolLoader()
+	h := NewForTest(loader)
+
+	h.ApplyConfig(context.Background(), &config.Config{
+		Plugins: config.PluginsConfig{
+			Enabled: true,
+			Dir:     makePluginDir(t, "alpha"),
+			Configs: enabledPluginConfigs("alpha"),
+		},
+	})
+
+	if loader.openCalls != 0 {
+		t.Fatalf("Open calls = %d, want 0 under policy", loader.openCalls)
+	}
+	if snap := h.Snapshot(); snap.enabled || len(snap.records) != 0 {
+		t.Fatalf("Snapshot() = %+v, want empty policy-disabled snapshot", snap)
+	}
+}
+
 func TestHostApplyConfig_DisabledGlobalDoesNotResolvePluginsDir(t *testing.T) {
 	loader := newTestSymbolLoader()
 	plugin := &testPlugin{

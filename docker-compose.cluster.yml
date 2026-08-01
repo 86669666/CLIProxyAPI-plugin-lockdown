@@ -12,6 +12,7 @@ services:
     container_name: cli-proxy-api-cluster
     environment:
       HOME_JWT: ${HOME_JWT:-}
+      CLIPROXY_DISABLE_PLUGINS: "true"
     ports:
       - "8317:8317"
     volumes:
