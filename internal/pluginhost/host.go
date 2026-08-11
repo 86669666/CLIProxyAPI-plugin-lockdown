@@ -219,7 +219,7 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 	h.mu.Unlock()
 
 	if !rc.Enabled {
-		h.clearPluginCapabilities(cfg)
+		h.shutdownAllLocked(ctx, cfg, true)
 		return
 	}
 

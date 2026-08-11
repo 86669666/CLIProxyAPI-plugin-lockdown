@@ -131,6 +131,45 @@ func TestHostApplyConfig_PolicySwitchShutsDownAndDetachesLoadedPlugin(t *testing
 	}
 }
 
+func TestHostApplyConfig_DisabledGlobalShutsDownLoadedPlugin(t *testing.T) {
+	loader := newTestSymbolLoader()
+	plugin := &testPlugin{
+		registerResult:    validTestPlugin("alpha"),
+		reconfigureResult: validTestPlugin("alpha"),
+	}
+	lookup := newTestSymbolLookup(plugin)
+	loader.lookups["alpha"] = lookup
+	h := NewForTest(loader)
+	pluginsDir := makePluginDir(t, "alpha")
+
+	h.ApplyConfig(context.Background(), &config.Config{Plugins: config.PluginsConfig{
+		Enabled: true,
+		Dir:     pluginsDir,
+		Configs: enabledPluginConfigs("alpha"),
+	}})
+	if !h.PluginLoaded("alpha") || !h.PluginBusy("alpha") {
+		t.Fatalf("plugin state before disable = loaded %v busy %v, want true true", h.PluginLoaded("alpha"), h.PluginBusy("alpha"))
+	}
+
+	h.ApplyConfig(context.Background(), &config.Config{Plugins: config.PluginsConfig{
+		Enabled: false,
+		Dir:     filepath.Join(t.TempDir(), "must-not-open"),
+	}})
+
+	if lookup.shutdownCalls != 1 {
+		t.Fatalf("Shutdown calls = %d, want 1", lookup.shutdownCalls)
+	}
+	if h.PluginLoaded("alpha") || h.PluginBusy("alpha") {
+		t.Fatalf("plugin state after disable = loaded %v busy %v, want false false", h.PluginLoaded("alpha"), h.PluginBusy("alpha"))
+	}
+	if loader.openCalls != 1 {
+		t.Fatalf("Open calls = %d, want 1 with no load after disable", loader.openCalls)
+	}
+	if snap := h.Snapshot(); snap.enabled || len(snap.records) != 0 {
+		t.Fatalf("Snapshot() = %+v, want empty disabled snapshot", snap)
+	}
+}
+
 func TestHostApplyConfig_DisabledGlobalDoesNotResolvePluginsDir(t *testing.T) {
 	loader := newTestSymbolLoader()
 	plugin := &testPlugin{

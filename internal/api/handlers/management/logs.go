@@ -164,24 +164,40 @@ func (h *Handler) DeleteLogs(c *gin.Context) {
 
 	removed := 0
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
 		name := entry.Name()
-		fullPath := filepath.Join(dir, name)
 		if name == defaultLogFileName {
-			if errTrunc := os.Truncate(fullPath, 0); errTrunc != nil && !os.IsNotExist(errTrunc) {
+			file, errOpen := safeOpenFileBeneath(dir, name, os.O_WRONLY, 0)
+			if errOpen != nil {
+				if os.IsNotExist(errOpen) || errors.Is(errOpen, errUnsafeFilePath) {
+					continue
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to open log file: %v", errOpen)})
+				return
+			}
+			errTrunc := file.Truncate(0)
+			errClose := file.Close()
+			if errTrunc != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to truncate log file: %v", errTrunc)})
+				return
+			}
+			if errClose != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to close log file: %v", errClose)})
 				return
 			}
 			continue
 		}
 		if isRotatedLogFile(name) {
-			if errRemove := os.Remove(fullPath); errRemove != nil && !os.IsNotExist(errRemove) {
+			removedFile, errRemove := safeRemoveRegularBeneath(dir, name)
+			if errRemove != nil && !os.IsNotExist(errRemove) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to remove %s: %v", name, errRemove)})
 				return
 			}
-			removed++
+			if removedFile {
+				removed++
+			}
 		}
 	}
 
@@ -232,7 +248,7 @@ func (h *Handler) GetRequestErrorLogs(c *gin.Context) {
 
 	files := make([]errorLog, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
 		name := entry.Name()
@@ -300,7 +316,7 @@ func (h *Handler) GetRequestLogByID(c *gin.Context) {
 	suffix := "-" + requestID + ".log"
 	var matchedFile string
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
 		name := entry.Name()
@@ -397,10 +413,17 @@ func (h *Handler) collectLogFiles(dir string) ([]string, error) {
 	}
 	cands := make([]candidate, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
 		name := entry.Name()
+		info, errInfo := entry.Info()
+		if errInfo != nil {
+			return nil, errInfo
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
 		if name == defaultLogFileName {
 			cands = append(cands, candidate{path: filepath.Join(dir, name), order: 0})
 			continue
@@ -442,7 +465,7 @@ func newLogAccumulator(cutoff int64, limit int) *logAccumulator {
 }
 
 func (acc *logAccumulator) consumeFile(path string) error {
-	file, err := os.Open(path)
+	file, err := safeOpenLogFile(path, os.O_RDONLY)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -593,7 +616,7 @@ func tailStartOffset(path string, boundary int64, limit int) (int64, error) {
 	if limit <= 0 {
 		return 0, nil
 	}
-	file, errOpen := os.Open(path)
+	file, errOpen := safeOpenLogFile(path, os.O_RDONLY)
 	if errOpen != nil {
 		return 0, errOpen
 	}
@@ -813,7 +836,7 @@ func shouldResetAmbiguousEmptyMainCursor(files []string, mainIndex int, cursor l
 	if cursor.File != defaultLogFileName || cursor.Offset != 0 || cursor.Size != 0 {
 		return false
 	}
-	info, errStat := os.Stat(files[mainIndex])
+	info, errStat := safeLogFileInfo(files[mainIndex])
 	if errStat != nil || info.IsDir() {
 		return false
 	}
@@ -824,7 +847,7 @@ func shouldResetAmbiguousEmptyMainCursor(files []string, mainIndex int, cursor l
 		if i == mainIndex || filepath.Base(files[i]) == defaultLogFileName {
 			continue
 		}
-		rotatedInfo, errRotated := os.Stat(files[i])
+		rotatedInfo, errRotated := safeLogFileInfo(files[i])
 		if errRotated != nil || rotatedInfo.IsDir() || rotatedInfo.Size() == 0 {
 			continue
 		}
@@ -836,7 +859,7 @@ func shouldResetAmbiguousEmptyMainCursor(files []string, mainIndex int, cursor l
 }
 
 func logFileChangedAfterCursor(path string, cursor logCursor) bool {
-	info, errStat := os.Stat(path)
+	info, errStat := safeLogFileInfo(path)
 	if errStat != nil || info.IsDir() || info.Size() == 0 {
 		return false
 	}
@@ -844,7 +867,7 @@ func logFileChangedAfterCursor(path string, cursor logCursor) bool {
 }
 
 func logFileMatchesCursor(path string, cursor logCursor) (bool, bool, error) {
-	info, errStat := os.Stat(path)
+	info, errStat := safeLogFileInfo(path)
 	if errStat != nil {
 		return false, false, errStat
 	}
@@ -944,8 +967,27 @@ func safeLogFilePath(logDir, name string) (string, error) {
 	return fullPath, nil
 }
 
+func safeOpenLogFile(path string, flags int) (*os.File, error) {
+	name := filepath.Base(path)
+	if !isAllowedLogCursorFile(name) {
+		return nil, fmt.Errorf("invalid log file")
+	}
+	return safeOpenFileBeneath(filepath.Dir(path), name, flags, 0)
+}
+
+func safeLogFileInfo(path string) (os.FileInfo, error) {
+	file, errOpen := safeOpenLogFile(path, os.O_RDONLY)
+	if errOpen != nil {
+		return nil, errOpen
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	return file.Stat()
+}
+
 func newLogCursor(path string, offset, latest int64) (string, error) {
-	info, errStat := os.Stat(path)
+	info, errStat := safeLogFileInfo(path)
 	if errStat != nil {
 		return "", errStat
 	}
@@ -993,7 +1035,7 @@ func logFileFingerprint(path string, boundary int64) (string, error) {
 	if boundary < 0 {
 		return "", fmt.Errorf("invalid fingerprint boundary")
 	}
-	file, errOpen := os.Open(path)
+	file, errOpen := safeOpenLogFile(path, os.O_RDONLY)
 	if errOpen != nil {
 		return "", errOpen
 	}
@@ -1058,7 +1100,7 @@ func readCompleteLogLines(path string, offset, maxOffset int64, limit int) (comp
 	if offset < 0 {
 		return completeLogRead{}, fmt.Errorf("invalid log offset")
 	}
-	file, errOpen := os.Open(path)
+	file, errOpen := safeOpenLogFile(path, os.O_RDONLY)
 	if errOpen != nil {
 		return completeLogRead{}, errOpen
 	}
@@ -1134,7 +1176,7 @@ func readCompleteLogLines(path string, offset, maxOffset int64, limit int) (comp
 }
 
 func completeLogBoundary(path string) (int64, error) {
-	file, errOpen := os.Open(path)
+	file, errOpen := safeOpenLogFile(path, os.O_RDONLY)
 	if errOpen != nil {
 		return 0, errOpen
 	}

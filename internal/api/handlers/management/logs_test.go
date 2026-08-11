@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -754,5 +755,84 @@ func TestDownloadRequestErrorLogRejectsSymlink(t *testing.T) {
 	h.DownloadRequestErrorLog(ctx)
 	if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "secret") {
 		t.Fatalf("symlink served: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetLogsIgnoresSymlinkLogFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges on Windows")
+	}
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.log")
+	secret := "[2026-06-15 10:00:00] outside-secret\n"
+	if errWrite := os.WriteFile(outside, []byte(secret), 0o600); errWrite != nil {
+		t.Fatalf("write outside log: %v", errWrite)
+	}
+	for _, name := range []string{defaultLogFileName, defaultLogFileName + ".1"} {
+		if errLink := os.Symlink(outside, filepath.Join(dir, name)); errLink != nil {
+			t.Fatalf("create log symlink %s: %v", name, errLink)
+		}
+	}
+
+	resp := performGetLogs(t, newLogsTestHandler(dir, true), "/v0/management/logs?limit=10")
+	if len(resp.Lines) != 0 {
+		t.Fatalf("lines = %#v, want symlink targets ignored", resp.Lines)
+	}
+}
+
+func TestDeleteLogsDoesNotFollowSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges on Windows")
+	}
+	dir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideMain := filepath.Join(outsideDir, "outside-main.log")
+	outsideRotated := filepath.Join(outsideDir, "outside-rotated.log")
+	if errWrite := os.WriteFile(outsideMain, []byte("main-secret"), 0o600); errWrite != nil {
+		t.Fatalf("write outside main log: %v", errWrite)
+	}
+	if errWrite := os.WriteFile(outsideRotated, []byte("rotated-secret"), 0o600); errWrite != nil {
+		t.Fatalf("write outside rotated log: %v", errWrite)
+	}
+	mainLink := filepath.Join(dir, defaultLogFileName)
+	rotatedLink := filepath.Join(dir, defaultLogFileName+".1")
+	if errLink := os.Symlink(outsideMain, mainLink); errLink != nil {
+		t.Fatalf("create main log symlink: %v", errLink)
+	}
+	if errLink := os.Symlink(outsideRotated, rotatedLink); errLink != nil {
+		t.Fatalf("create rotated log symlink: %v", errLink)
+	}
+	regularRotated := filepath.Join(dir, defaultLogFileName+".2")
+	if errWrite := os.WriteFile(regularRotated, []byte("remove-me"), 0o600); errWrite != nil {
+		t.Fatalf("write regular rotated log: %v", errWrite)
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/v0/management/logs", nil)
+	newLogsTestHandler(dir, true).DeleteLogs(c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DeleteLogs status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	for path, want := range map[string]string{outsideMain: "main-secret", outsideRotated: "rotated-secret"} {
+		data, errRead := os.ReadFile(path)
+		if errRead != nil {
+			t.Fatalf("read outside log %s: %v", path, errRead)
+		}
+		if string(data) != want {
+			t.Fatalf("outside log %s = %q, want %q", path, data, want)
+		}
+	}
+	for _, link := range []string{mainLink, rotatedLink} {
+		info, errLstat := os.Lstat(link)
+		if errLstat != nil {
+			t.Fatalf("lstat symlink %s: %v", link, errLstat)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s is no longer a symlink", link)
+		}
+	}
+	if _, errStat := os.Stat(regularRotated); !os.IsNotExist(errStat) {
+		t.Fatalf("regular rotated log still exists or stat failed unexpectedly: %v", errStat)
 	}
 }

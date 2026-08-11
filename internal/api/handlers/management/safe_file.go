@@ -15,47 +15,37 @@ import (
 var errUnsafeFilePath = errors.New("unsafe file path")
 
 func safeOpenBeneath(baseDir, name string) (*os.File, error) {
+	return safeOpenFileBeneath(baseDir, name, os.O_RDONLY, 0)
+}
+
+func validateSafeRelativePath(name string) (string, error) {
 	if strings.TrimSpace(name) == "" || filepath.IsAbs(name) || filepath.VolumeName(name) != "" || strings.Contains(name, "\\") {
-		return nil, fmt.Errorf("%w: invalid file name", errUnsafeFilePath)
+		return "", fmt.Errorf("%w: invalid file name", errUnsafeFilePath)
 	}
 	cleanName := filepath.Clean(name)
 	if cleanName == "." || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(os.PathSeparator)) {
-		return nil, fmt.Errorf("%w: path traversal", errUnsafeFilePath)
+		return "", fmt.Errorf("%w: path traversal", errUnsafeFilePath)
 	}
 	for _, component := range strings.Split(cleanName, string(os.PathSeparator)) {
 		if component == ".." {
-			return nil, fmt.Errorf("%w: path traversal", errUnsafeFilePath)
+			return "", fmt.Errorf("%w: path traversal", errUnsafeFilePath)
 		}
 	}
-	baseAbs, errAbs := filepath.Abs(baseDir)
-	if errAbs != nil {
-		return nil, fmt.Errorf("resolve base directory: %w", errAbs)
-	}
-	currentPath := baseAbs
-	for _, component := range strings.Split(cleanName, string(os.PathSeparator)) {
-		currentPath = filepath.Join(currentPath, component)
-		info, errLstat := os.Lstat(currentPath)
-		if errLstat != nil {
-			return nil, errLstat
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("%w: symbolic links are not allowed", errUnsafeFilePath)
-		}
-	}
-	file, errOpen := os.OpenInRoot(baseAbs, cleanName)
-	if errOpen != nil {
-		return nil, errOpen
+	return cleanName, nil
+}
+
+func validateOpenedRegularFile(file *os.File) error {
+	if file == nil {
+		return fmt.Errorf("%w: file is unavailable", errUnsafeFilePath)
 	}
 	info, errStat := file.Stat()
 	if errStat != nil {
-		_ = file.Close()
-		return nil, errStat
+		return errStat
 	}
 	if !info.Mode().IsRegular() {
-		_ = file.Close()
-		return nil, fmt.Errorf("%w: file is not regular", errUnsafeFilePath)
+		return fmt.Errorf("%w: file is not regular", errUnsafeFilePath)
 	}
-	return file, nil
+	return nil
 }
 
 func serveFileAttachment(c *gin.Context, file *os.File, name string) error {
