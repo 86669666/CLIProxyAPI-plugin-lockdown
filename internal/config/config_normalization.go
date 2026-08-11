@@ -1,10 +1,10 @@
 package config
 
 import (
-	"os"
 	"strconv"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginpolicy"
 	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 	"gopkg.in/yaml.v3"
 )
@@ -46,9 +46,12 @@ func (cfg *Config) NormalizePluginsConfig() {
 
 // PluginsDisabledByPolicy reports whether the process-wide plugin lockdown is enabled.
 func PluginsDisabledByPolicy() bool {
-	raw := strings.TrimSpace(os.Getenv("CLIPROXY_DISABLE_PLUGINS"))
-	disabled, err := strconv.ParseBool(raw)
-	return err == nil && disabled
+	return pluginpolicy.Disabled()
+}
+
+// ParsePluginsDisabledPolicy parses the process-wide plugin lockdown policy.
+func ParsePluginsDisabledPolicy(raw string) (bool, error) {
+	return pluginpolicy.ParseDisabled(raw)
 }
 
 func setPluginRawEnabled(node *yaml.Node, enabled bool) {

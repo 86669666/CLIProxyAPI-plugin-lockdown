@@ -315,33 +315,21 @@ func (h *Handler) GetRequestLogByID(c *gin.Context) {
 		return
 	}
 
-	dirAbs, errAbs := filepath.Abs(dir)
-	if errAbs != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to resolve log directory: %v", errAbs)})
-		return
-	}
-	fullPath := filepath.Clean(filepath.Join(dirAbs, matchedFile))
-	prefix := dirAbs + string(os.PathSeparator)
-	if !strings.HasPrefix(fullPath, prefix) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log file path"})
-		return
-	}
-
-	info, errStat := os.Stat(fullPath)
-	if errStat != nil {
-		if os.IsNotExist(errStat) {
+	file, errOpen := safeOpenBeneath(dir, matchedFile)
+	if errOpen != nil {
+		if errors.Is(errOpen, errUnsafeFilePath) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log file path"})
+		} else if os.IsNotExist(errOpen) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "log file not found"})
-			return
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read log file: %v", errOpen)})
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read log file: %v", errStat)})
 		return
 	}
-	if info.IsDir() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log file"})
-		return
+	defer file.Close()
+	if errServe := serveFileAttachment(c, file, matchedFile); errServe != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to serve log file: %v", errServe)})
 	}
-
-	c.FileAttachment(fullPath, matchedFile)
 }
 
 // DownloadRequestErrorLog downloads a specific error request log file by name.
@@ -371,33 +359,21 @@ func (h *Handler) DownloadRequestErrorLog(c *gin.Context) {
 		return
 	}
 
-	dirAbs, errAbs := filepath.Abs(dir)
-	if errAbs != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to resolve log directory: %v", errAbs)})
-		return
-	}
-	fullPath := filepath.Clean(filepath.Join(dirAbs, name))
-	prefix := dirAbs + string(os.PathSeparator)
-	if !strings.HasPrefix(fullPath, prefix) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log file path"})
-		return
-	}
-
-	info, errStat := os.Stat(fullPath)
-	if errStat != nil {
-		if os.IsNotExist(errStat) {
+	file, errOpen := safeOpenBeneath(dir, name)
+	if errOpen != nil {
+		if errors.Is(errOpen, errUnsafeFilePath) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log file path"})
+		} else if os.IsNotExist(errOpen) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "log file not found"})
-			return
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read log file: %v", errOpen)})
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read log file: %v", errStat)})
 		return
 	}
-	if info.IsDir() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid log file"})
-		return
+	defer file.Close()
+	if errServe := serveFileAttachment(c, file, name); errServe != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to serve log file: %v", errServe)})
 	}
-
-	c.FileAttachment(fullPath, name)
 }
 
 func (h *Handler) logDirectory() string {

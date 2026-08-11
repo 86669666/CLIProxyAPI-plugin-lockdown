@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginpolicy"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -67,8 +69,96 @@ type rpcHostModelExecutionRequest struct {
 }
 
 type dynamicHostCallbackEntry struct {
-	host     *Host
+	host       *Host
+	generation hostCallbackGeneration
+	mu         sync.Mutex
+	cond       *sync.Cond
+	active     bool
+	calls      int
+}
+
+type hostCallbackGeneration struct {
 	pluginID string
+	path     string
+	version  string
+	nonce    uintptr
+}
+
+func newDynamicHostCallbackEntry(host *Host, file pluginFile, nonce uintptr) *dynamicHostCallbackEntry {
+	entry := &dynamicHostCallbackEntry{
+		host: host,
+		generation: hostCallbackGeneration{
+			pluginID: strings.TrimSpace(file.ID),
+			path:     cleanPluginPath(file.Path),
+			version:  strings.TrimSpace(file.Version),
+			nonce:    nonce,
+		},
+		active: true,
+	}
+	entry.cond = sync.NewCond(&entry.mu)
+	return entry
+}
+
+func (e *dynamicHostCallbackEntry) acquire() (*Host, hostCallbackGeneration, bool) {
+	if e == nil {
+		return nil, hostCallbackGeneration{}, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.host == nil {
+		return nil, hostCallbackGeneration{}, false
+	}
+	e.calls++
+	return e.host, e.generation, e.active
+}
+
+func (e *dynamicHostCallbackEntry) release() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.calls--
+	if e.calls == 0 {
+		e.cond.Broadcast()
+	}
+	e.mu.Unlock()
+}
+
+func (e *dynamicHostCallbackEntry) revoke() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.active = false
+	e.mu.Unlock()
+}
+
+func (e *dynamicHostCallbackEntry) wait() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	for e.calls > 0 {
+		e.cond.Wait()
+	}
+	e.mu.Unlock()
+}
+
+func dispatchDynamicHostCallback(entry *dynamicHostCallbackEntry, method string, request []byte) ([]byte, error) {
+	host, generation, active := entry.acquire()
+	if host == nil {
+		return nil, fmt.Errorf("plugin host callback generation is unavailable")
+	}
+	defer entry.release()
+	return dispatchAcquiredDynamicHostCallback(host, generation, active, method, request)
+}
+
+func dispatchAcquiredDynamicHostCallback(host *Host, generation hostCallbackGeneration, active bool, method string, request []byte) ([]byte, error) {
+	if !active {
+		return nil, fmt.Errorf("plugin host callback generation is retired")
+	}
+	ctx := withHostCallbackPluginID(context.Background(), generation.pluginID)
+	return host.callFromPlugin(ctx, method, request)
 }
 
 type hostCallbackPluginIDKey struct{}
@@ -96,6 +186,9 @@ func hostCallbackPluginIDFromContext(ctx context.Context) string {
 }
 
 func (h *Host) callFromPlugin(ctx context.Context, method string, request []byte) ([]byte, error) {
+	if pluginpolicy.Disabled() {
+		return nil, pluginpolicy.ErrDisabled
+	}
 	switch method {
 	case pluginabi.MethodHostModelExecute:
 		return h.callHostModelExecute(ctx, request)

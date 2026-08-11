@@ -98,10 +98,12 @@ var (
 type dynamicLibraryLoader struct{}
 
 type dynamicLibraryClient struct {
-	handle  unsafe.Pointer
-	hostAPI *C.cliproxy_host_api
-	hostCtx unsafe.Pointer
-	api     C.cliproxy_plugin_api
+	handle         unsafe.Pointer
+	hostAPI        *C.cliproxy_host_api
+	hostCtx        unsafe.Pointer
+	hostCallbackID uintptr
+	hostCallback   *dynamicHostCallbackEntry
+	api            C.cliproxy_plugin_api
 }
 
 func defaultPluginLoader() pluginLoader {
@@ -138,13 +140,16 @@ func (dynamicLibraryLoader) Open(file pluginFile, host *Host) (pluginClient, err
 	}
 	id := hostCallbackID.Add(1)
 	*(*C.uintptr_t)(hostCtx) = C.uintptr_t(id)
-	hostCallbackEntries.Store(id, dynamicHostCallbackEntry{host: host, pluginID: file.ID})
+	hostCallback := newDynamicHostCallbackEntry(host, file, id)
+	hostCallbackEntries.Store(id, hostCallback)
 	C.cliproxy_set_host_api(hostAPI, C.uint32_t(pluginHostABIVersion), hostCtx)
 
 	client := &dynamicLibraryClient{
-		handle:  handle,
-		hostAPI: hostAPI,
-		hostCtx: hostCtx,
+		handle:         handle,
+		hostAPI:        hostAPI,
+		hostCtx:        hostCtx,
+		hostCallbackID: id,
+		hostCallback:   hostCallback,
 	}
 	rc := C.cliproxy_call_init(initSymbol, hostAPI, &client.api)
 	if rc != 0 {
@@ -203,16 +208,20 @@ func (c *dynamicLibraryClient) Shutdown() {
 	if c == nil {
 		return
 	}
+	c.revokeHostCallbacks()
 	if c.api.shutdown != nil {
 		C.cliproxy_shutdown_plugin(c.api.shutdown)
 		c.api.shutdown = nil
 	}
+	if c.hostCallback != nil {
+		c.hostCallback.wait()
+	}
+	hostCallbackEntries.Delete(c.hostCallbackID)
 	if c.hostCtx != nil {
-		id := uintptr(*(*C.uintptr_t)(c.hostCtx))
-		hostCallbackEntries.Delete(id)
 		C.free(c.hostCtx)
 		c.hostCtx = nil
 	}
+	c.hostCallback = nil
 	if c.hostAPI != nil {
 		C.free(unsafe.Pointer(c.hostAPI))
 		c.hostAPI = nil
@@ -221,6 +230,13 @@ func (c *dynamicLibraryClient) Shutdown() {
 		C.cliproxy_dlclose(c.handle)
 		c.handle = nil
 	}
+}
+
+func (c *dynamicLibraryClient) revokeHostCallbacks() {
+	if c == nil || c.hostCallback == nil {
+		return
+	}
+	c.hostCallback.revoke()
 }
 
 func dlerrorString() string {

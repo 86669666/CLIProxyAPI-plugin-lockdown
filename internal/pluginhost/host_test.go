@@ -71,6 +71,66 @@ func TestHostApplyConfig_PolicySkipsEnabledLoader(t *testing.T) {
 	}
 }
 
+func TestHostApplyConfig_PolicySwitchShutsDownAndDetachesLoadedPlugin(t *testing.T) {
+	loader := newTestSymbolLoader()
+	plugin := &testPlugin{
+		registerResult:    validTestPlugin("alpha"),
+		reconfigureResult: validTestPlugin("alpha"),
+	}
+	lookup := newTestSymbolLookup(plugin)
+	loader.lookups["alpha"] = lookup
+	h := NewForTest(loader)
+	cfg := &config.Config{Plugins: config.PluginsConfig{
+		Enabled: true,
+		Dir:     makePluginDir(t, "alpha"),
+		Configs: enabledPluginConfigs("alpha"),
+	}}
+
+	h.ApplyConfig(context.Background(), cfg)
+	if !h.PluginLoaded("alpha") || !h.PluginBusy("alpha") || len(h.activeRecords()) != 1 {
+		t.Fatalf("plugin state before policy = loaded %v busy %v active %d, want true true 1", h.PluginLoaded("alpha"), h.PluginBusy("alpha"), len(h.activeRecords()))
+	}
+	h.mu.Lock()
+	h.commandLineFlags["alpha-flag"] = commandLineFlagRecord{pluginID: "alpha"}
+	h.commandLineHits["alpha-flag"] = struct{}{}
+	h.managementRoutes["GET /alpha"] = managementRouteRecord{pluginID: "alpha"}
+	h.resourceRoutes["GET /alpha"] = resourceRouteRecord{pluginID: "alpha"}
+	h.mu.Unlock()
+
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	h.ApplyConfig(context.Background(), cfg)
+
+	if lookup.shutdownCalls != 1 {
+		t.Fatalf("Shutdown calls = %d, want 1", lookup.shutdownCalls)
+	}
+	if h.PluginLoaded("alpha") || h.PluginBusy("alpha") {
+		t.Fatalf("plugin state after policy = loaded %v busy %v, want false false", h.PluginLoaded("alpha"), h.PluginBusy("alpha"))
+	}
+	if len(h.activeRecords()) != 0 {
+		t.Fatalf("active records = %d, want 0", len(h.activeRecords()))
+	}
+	h.mu.Lock()
+	commandLineFlags := len(h.commandLineFlags)
+	commandLineHits := len(h.commandLineHits)
+	managementRoutes := len(h.managementRoutes)
+	resourceRoutes := len(h.resourceRoutes)
+	loaded := len(h.loaded)
+	retired := len(h.retired)
+	loading := len(h.loading)
+	h.mu.Unlock()
+	if commandLineFlags != 0 || commandLineHits != 0 || managementRoutes != 0 || resourceRoutes != 0 || loaded != 0 || retired != 0 || loading != 0 {
+		t.Fatalf("runtime state = CLI %d/%d routes %d/%d loaded %d retired %d loading %d, want all zero", commandLineFlags, commandLineHits, managementRoutes, resourceRoutes, loaded, retired, loading)
+	}
+	if snap := h.Snapshot(); snap.enabled || len(snap.records) != 0 {
+		t.Fatalf("Snapshot() = %+v, want empty disabled snapshot", snap)
+	}
+
+	h.ApplyConfig(context.Background(), cfg)
+	if loader.openCalls != 1 || plugin.registerCalls != 1 || lookup.shutdownCalls != 1 {
+		t.Fatalf("calls after repeated policy apply = open %d register %d shutdown %d, want 1/1/1", loader.openCalls, plugin.registerCalls, lookup.shutdownCalls)
+	}
+}
+
 func TestHostApplyConfig_DisabledGlobalDoesNotResolvePluginsDir(t *testing.T) {
 	loader := newTestSymbolLoader()
 	plugin := &testPlugin{

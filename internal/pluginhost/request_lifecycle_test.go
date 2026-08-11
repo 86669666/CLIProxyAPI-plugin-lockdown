@@ -122,6 +122,33 @@ func TestCompleteRequestDoesNotWaitForBlockingPlugin(t *testing.T) {
 	close(release)
 }
 
+func TestCompleteRequestPolicyPreventsNewLifecycleCall(t *testing.T) {
+	called := make(chan struct{}, 2)
+	host := newHostWithRecords(capabilityRecord{
+		id: "lifecycle",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+			RequestLifecyclePlugin: requestLifecyclePluginFunc(func(context.Context, pluginapi.RequestCompletion) {
+				called <- struct{}{}
+			}),
+		}},
+	})
+
+	host.CompleteRequest(context.Background(), pluginapi.RequestCompletion{RequestID: "before-policy"})
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle plugin was not invoked before policy")
+	}
+
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	host.CompleteRequest(context.Background(), pluginapi.RequestCompletion{RequestID: "after-policy"})
+	select {
+	case <-called:
+		t.Fatal("lifecycle plugin was invoked after policy")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestRPCCapabilitiesAndAdapterIncludeRequestLifecycle(t *testing.T) {
 	var got pluginapi.RequestCompletion
 	plugin := validTestPlugin("request-lifecycle")

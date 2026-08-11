@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -747,15 +749,17 @@ type authCheckingHTTPDoer struct {
 }
 
 type singleResponseHTTPDoer struct {
-	body io.ReadCloser
+	body          io.ReadCloser
+	contentLength int64
 }
 
 func (c singleResponseHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 	return &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       c.body,
-		Header:     make(http.Header),
-		Request:    req,
+		StatusCode:    http.StatusOK,
+		Body:          c.body,
+		ContentLength: c.contentLength,
+		Header:        make(http.Header),
+		Request:       req,
 	}, nil
 }
 
@@ -810,5 +814,71 @@ func testPlugin() Plugin {
 		Author:      "author-name",
 		Version:     "0.1.0",
 		Repository:  "https://github.com/author-name/cliproxy-sample-provider-plugin",
+	}
+}
+
+func TestDownloadAssetRejectsDeclaredSizeOverGlobalLimit(t *testing.T) {
+	body := &trackingReadCloser{data: []byte("not-read")}
+	client := Client{HTTPClient: singleResponseHTTPDoer{body: body, contentLength: maxPluginDownloadSize + 1}}
+	_, errDownload := client.DownloadAsset(context.Background(), ReleaseAsset{Name: "sample.zip", BrowserDownloadURL: "https://downloads.example/sample.zip"})
+	if errDownload == nil || !strings.Contains(errDownload.Error(), "maximum allowed size") {
+		t.Fatalf("error=%v", errDownload)
+	}
+	if body.offset != 0 {
+		t.Fatalf("body read=%d want=0", body.offset)
+	}
+}
+
+func TestDownloadArtifactUsesStricterDeclaredSize(t *testing.T) {
+	body := &trackingReadCloser{data: []byte("12345")}
+	client := Client{HTTPClient: singleResponseHTTPDoer{body: body, contentLength: 5}}
+	sum := sha256.Sum256(nil)
+	_, errDownload := client.DownloadArtifact(context.Background(), Artifact{GOOS: "linux", GOARCH: "amd64", URL: "https://downloads.example/sample.zip", SHA256: hex.EncodeToString(sum[:]), Size: 4})
+	if errDownload == nil || !strings.Contains(errDownload.Error(), "maximum allowed size") {
+		t.Fatalf("error=%v", errDownload)
+	}
+}
+
+func TestReadPluginArchiveEntryEnforcesPerFileLimit(t *testing.T) {
+	_, errRead := readPluginArchiveEntry(strings.NewReader("12345"), "plugin.so", 4)
+	if errRead == nil || !strings.Contains(errRead.Error(), "maximum extracted size") {
+		t.Fatalf("error=%v", errRead)
+	}
+}
+
+func TestInstallArchiveRejectsOversizedExtractedArchive(t *testing.T) {
+	archiveData := makeZip(t, map[string]string{"sample-provider.so": "library-data"})
+	centralDirectory := bytes.Index(archiveData, []byte{'P', 'K', 1, 2})
+	if centralDirectory < 0 {
+		t.Fatal("zip central directory not found")
+	}
+	binary.LittleEndian.PutUint32(archiveData[centralDirectory+24:], uint32(maxPluginExtractedSize+1))
+	_, errInstall := InstallArchive(archiveData, testPlugin(), InstallOptions{PluginsDir: t.TempDir(), GOOS: "linux", GOARCH: "amd64"})
+	if errInstall == nil || !strings.Contains(errInstall.Error(), "maximum extracted size") {
+		t.Fatalf("error=%v", errInstall)
+	}
+}
+
+func TestInstallArchiveRejectsTooManyZeroLengthEntries(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	pluginFile, errCreate := writer.Create("sample-provider.so")
+	if errCreate != nil {
+		t.Fatal(errCreate)
+	}
+	if _, errWrite := pluginFile.Write([]byte("library-data")); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	for index := 0; index < maxPluginArchiveEntries; index++ {
+		if _, errCreate = writer.Create(fmt.Sprintf("empty-%04d", index)); errCreate != nil {
+			t.Fatal(errCreate)
+		}
+	}
+	if errClose := writer.Close(); errClose != nil {
+		t.Fatal(errClose)
+	}
+	_, errInstall := InstallArchive(buffer.Bytes(), testPlugin(), InstallOptions{PluginsDir: t.TempDir(), GOOS: "linux", GOARCH: "amd64"})
+	if errInstall == nil || !strings.Contains(errInstall.Error(), "maximum is 4096") {
+		t.Fatalf("error=%v", errInstall)
 	}
 }

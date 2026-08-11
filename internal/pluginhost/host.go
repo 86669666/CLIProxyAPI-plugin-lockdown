@@ -11,6 +11,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginpolicy"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
@@ -200,11 +201,11 @@ func (h *Host) ApplyConfig(ctx context.Context, cfg *config.Config) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if errContext := ctx.Err(); errContext != nil {
+	if config.PluginsDisabledByPolicy() {
+		h.shutdownAllLocked(ctx, cfg, true)
 		return
 	}
-	if config.PluginsDisabledByPolicy() {
-		h.clearPluginCapabilities(cfg)
+	if errContext := ctx.Err(); errContext != nil {
 		return
 	}
 
@@ -595,12 +596,27 @@ func (h *Host) ShutdownAllContext(ctx context.Context) {
 		return
 	}
 	defer h.unlockApply()
+	h.shutdownAllLocked(ctx, nil, false)
+}
 
+func (h *Host) shutdownAllLocked(ctx context.Context, cfg *config.Config, updateRuntimeConfig bool) {
+	if h == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	targets := make([]pluginUnloadTarget, 0)
-	var loading map[string]*pluginLoadRequest
+	loading := make(map[string]*pluginLoadRequest)
 	h.mu.Lock()
-	loading = make(map[string]*pluginLoadRequest, len(h.loading))
+	if updateRuntimeConfig {
+		h.runtimeConfig = cfg
+	}
 	for id, request := range h.loading {
+		if request == nil || request.cleanupStarted {
+			continue
+		}
+		request.cleanupStarted = true
 		loading[id] = request
 	}
 	for _, lp := range h.loaded {
@@ -650,7 +666,11 @@ func (h *Host) ShutdownAllContext(ctx context.Context) {
 	h.refreshThinkingProviders(nil)
 	h.RegisterFrontendAuthProviders()
 	for id, request := range loading {
-		h.cleanupCanceledPluginLoad(id, request)
+		go func(id string, request *pluginLoadRequest) {
+			result := <-request.result
+			h.discardLoadedPlugin(result.loaded)
+			h.clearLoadingRequest(id, request)
+		}(id, request)
 	}
 	for _, target := range targets {
 		shutdownPluginClient(ctx, target.client)
@@ -705,15 +725,21 @@ func (h *Host) retireLoadedPluginLocked(lp *loadedPlugin) {
 	if h == nil || lp == nil {
 		return
 	}
+	if revoker, ok := lp.client.(hostCallbackRevoker); ok {
+		revoker.revokeHostCallbacks()
+	}
 	h.retired[lp.id] = append(h.retired[lp.id], lp)
 }
 
 func (h *Host) recordCurrent(record capabilityRecord) bool {
+	if pluginpolicy.Disabled() {
+		return false
+	}
 	return h.pluginIdentityCurrent(record.id, record.path, record.version)
 }
 
 func (h *Host) pluginIdentityCurrent(id string, path string, version string) bool {
-	if h == nil {
+	if h == nil || pluginpolicy.Disabled() {
 		return false
 	}
 	version = strings.TrimSpace(version)
@@ -825,6 +851,9 @@ func (h *Host) callRegister(ctx context.Context, lp *loadedPlugin, item runtimeI
 }
 
 func (h *Host) safePluginCall(ctx context.Context, id, method string, fn func() pluginapi.Plugin) (out pluginapi.Plugin, ok bool) {
+	if pluginpolicy.Disabled() {
+		return pluginapi.Plugin{}, false
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			h.fusePlugin(id, method, recovered)

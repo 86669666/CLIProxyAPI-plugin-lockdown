@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2259,5 +2260,112 @@ func TestInteractionsRouteRegistered(t *testing.T) {
 	server.engine.ServeHTTP(rr, req)
 	if rr.Code == http.StatusNotFound {
 		t.Fatalf("status = %d, want route registered; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRootLandingIsGenericAndHardened(t *testing.T) {
+	server := newTestServer(t)
+	rec := httptest.NewRecorder()
+	server.engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "CLIProxyAPI") || strings.Contains(body, "/v1/") {
+		t.Fatalf("root leaks product or API identity: %s", body)
+	}
+	if !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("Content-Type=%q", rec.Header().Get("Content-Type"))
+	}
+	for name, want := range map[string]string{
+		"Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+		"Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
+	} {
+		if got := rec.Header().Get(name); got != want {
+			t.Fatalf("%s=%q want=%q", name, got, want)
+		}
+	}
+	for _, name := range []string{"Access-Control-Allow-Origin", "Access-Control-Expose-Headers", "X-CPA-Support-Plugin", "Server"} {
+		if got := rec.Header().Get(name); got != "" {
+			t.Fatalf("%s=%q want absent", name, got)
+		}
+	}
+}
+
+func TestPluginManagementRoutesDeniedByPolicy(t *testing.T) {
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	server := newTestServerWithOptions(t, WithLocalManagementPassword("secret"))
+	paths := map[string]string{
+		http.MethodGet: "/v0/management/plugins",
+	}
+	_ = paths
+	requests := []struct{ method, path string }{
+		{http.MethodGet, "/v0/management/plugins"},
+		{http.MethodGet, "/v0/management/plugin-store"},
+		{http.MethodPost, "/v0/management/plugin-store/sample/install"},
+		{http.MethodDelete, "/v0/management/plugins/sample"},
+		{http.MethodPatch, "/v0/management/plugins/sample/enabled"},
+		{http.MethodGet, "/v0/management/plugins/sample/config"},
+		{http.MethodPut, "/v0/management/plugins/sample/config"},
+		{http.MethodPatch, "/v0/management/plugins/sample/config"},
+	}
+	for _, item := range requests {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(item.method, item.path, strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer secret")
+		server.engine.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s status=%d body=%s", item.method, item.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestDynamicPluginNoRouteDeniedByPolicy(t *testing.T) {
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	server := &Server{cfg: &proxyconfig.Config{}, pluginHost: &pluginhost.Host{}, mgmt: managementHandlers.NewHandlerWithoutConfigFilePath(&proxyconfig.Config{}, nil)}
+	server.managementRoutesEnabled.Store(true)
+	for _, path := range []string{"/v0/management/plugin/custom", "/v0/resource/plugins/sample/icon.svg"} {
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodGet, path, nil)
+		server.pluginManagementNoRoute(ctx)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestManagementBodyLimitAppliesToPublicOAuthCallbackRoute(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "test-management-key")
+	server := newTestServer(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v0/management/oauth-callback", bytes.NewReader(make([]byte, 4*1024*1024+1)))
+	request.Header.Set("Content-Type", "application/json")
+	server.engine.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d want=%d body=%s", recorder.Code, http.StatusRequestEntityTooLarge, recorder.Body.String())
+	}
+}
+
+func TestManagementBodyLimitAppliesToDynamicPluginNoRoute(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "secret")
+	cfg := &proxyconfig.Config{}
+	cfg.RemoteManagement.AllowRemote = true
+	server := &Server{
+		cfg:        cfg,
+		pluginHost: pluginhost.New(),
+		mgmt:       managementHandlers.NewHandlerWithoutConfigFilePath(cfg, nil),
+	}
+	server.managementRoutesEnabled.Store(true)
+	server.mgmt.SetLocalPassword("secret")
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	request := httptest.NewRequest(http.MethodPost, "/v0/management/plugins/sample/custom", bytes.NewReader(make([]byte, 4*1024*1024+1)))
+	request.RemoteAddr = "127.0.0.1:12345"
+	request.Header.Set("Authorization", "Bearer secret")
+	ctx.Request = request
+	server.pluginManagementNoRoute(ctx)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d want=%d body=%s", recorder.Code, http.StatusRequestEntityTooLarge, recorder.Body.String())
 	}
 }

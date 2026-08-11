@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -56,5 +57,25 @@ func TestDownloadAuthFile_RejectsPathSeparators(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected %d for name %q, got %d with body %s", http.StatusBadRequest, name, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func TestDownloadAuthFile_RejectsSymlink(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	authDir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.json")
+	if errWrite := os.WriteFile(outside, []byte(`{"secret":true}`), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	if errLink := os.Symlink(outside, filepath.Join(authDir, "linked.json")); errLink != nil {
+		t.Skipf("symlink unavailable: %v", errLink)
+	}
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, nil)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/auth-files/download?name=linked.json", nil)
+	h.DownloadAuthFile(ctx)
+	if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("symlink download was not rejected: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

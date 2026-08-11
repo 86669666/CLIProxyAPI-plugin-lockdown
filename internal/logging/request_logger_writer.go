@@ -74,12 +74,14 @@ func (l *FileRequestLogger) logRequestWithSources(url, method string, requestHea
 			responseToWrite = response
 		}
 
+		redactedRequestHeaders := RedactHeaders(requestHeaders)
+		redactedResponseHeaders := RedactHeaders(responseHeaders)
 		var buf bytes.Buffer
 		writeErr := l.writeNonStreamingLog(
 			&buf,
 			url,
 			method,
-			requestHeaders,
+			redactedRequestHeaders,
 			body,
 			"",
 			websocketTimeline,
@@ -92,7 +94,7 @@ func (l *FileRequestLogger) logRequestWithSources(url, method string, requestHea
 			apiWebsocketTimelineSource,
 			apiResponseErrors,
 			statusCode,
-			responseHeaders,
+			redactedResponseHeaders,
 			responseToWrite,
 			decompressErr,
 			requestTimestamp,
@@ -101,7 +103,7 @@ func (l *FileRequestLogger) logRequestWithSources(url, method string, requestHea
 		if writeErr != nil {
 			return fmt.Errorf("failed to build request log content: %w", writeErr)
 		}
-		return l.forwardRequestLogToHome(context.Background(), requestHeaders, requestID, buf.String())
+		return l.forwardRequestLogToHome(context.Background(), redactedRequestHeaders, requestID, buf.String())
 	}
 
 	// Ensure logs directory exists

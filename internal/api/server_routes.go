@@ -129,14 +129,29 @@ func (s *Server) setupRoutes() {
 
 	// Root endpoint
 	s.engine.GET("/", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "CLI Proxy API Server",
-			"endpoints": []string{
-				"POST /v1/chat/completions",
-				"POST /v1/completions",
-				"GET /v1/models",
-			},
-		})
+		for _, header := range []string{
+			"Access-Control-Allow-Credentials",
+			"Access-Control-Allow-Headers",
+			"Access-Control-Allow-Methods",
+			"Access-Control-Allow-Origin",
+			"Access-Control-Expose-Headers",
+			"Server",
+			"X-CPA-Build-Date",
+			"X-CPA-Commit",
+			"X-CPA-Home-Build-Date",
+			"X-CPA-Home-Version",
+			"X-CPA-Safe-Mode",
+			"X-CPA-Support-Plugin",
+			"X-CPA-Version",
+		} {
+			c.Writer.Header().Del(header)
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Welcome</title></head><body><main><h1>Welcome</h1></main></body></html>"))
 	})
 
 	// OAuth callback endpoints (reuse main server port)

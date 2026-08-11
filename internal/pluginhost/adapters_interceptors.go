@@ -149,6 +149,9 @@ func (h *Host) CompleteRequestExcept(ctx context.Context, completion pluginapi.R
 		next := completion
 		next.Metadata = cloneInterceptorMetadata(completion.Metadata)
 		go func(record capabilityRecord, plugin pluginapi.RequestLifecyclePlugin, completion pluginapi.RequestCompletion) {
+			if !h.recordCurrent(record) {
+				return
+			}
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					h.fusePlugin(record.id, "RequestLifecyclePlugin.HandleRequestComplete", recovered)

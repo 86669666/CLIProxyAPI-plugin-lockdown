@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginpolicy"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -290,6 +292,29 @@ func TestHostModelExecuteCallback(t *testing.T) {
 	}
 	if got.Alt != "raw" {
 		t.Fatalf("alt = %q, want raw", got.Alt)
+	}
+}
+
+func TestHostCallbackPolicyRejectsBeforeDispatch(t *testing.T) {
+	host := New()
+	executeCalls := 0
+	host.SetModelExecutor(&fakeHostModelExecutor{
+		executeModel: func(context.Context, handlers.ModelExecutionRequest) (handlers.ModelExecutionResponse, *interfaces.ErrorMessage) {
+			executeCalls++
+			return handlers.ModelExecutionResponse{StatusCode: http.StatusOK}, nil
+		},
+	})
+	rawReq, errMarshal := json.Marshal(rpcHostModelExecutionRequest{HostModelExecutionRequest: pluginapi.HostModelExecutionRequest{Model: "model-1"}})
+	if errMarshal != nil {
+		t.Fatalf("marshal request: %v", errMarshal)
+	}
+
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	if _, errCall := host.callFromPlugin(context.Background(), pluginabi.MethodHostModelExecute, rawReq); !errors.Is(errCall, pluginpolicy.ErrDisabled) {
+		t.Fatalf("callFromPlugin() error = %v, want ErrDisabled", errCall)
+	}
+	if executeCalls != 0 {
+		t.Fatalf("model execute calls = %d, want 0", executeCalls)
 	}
 }
 
@@ -749,4 +774,112 @@ func TestHostLogCallbackRestoresRegisteredRequestContext(t *testing.T) {
 	if !strings.Contains(got, "plugin callback message") || !strings.Contains(got, "request_id=request-123") {
 		t.Fatalf("log output = %q, want message and request_id field", got)
 	}
+}
+
+func TestDynamicHostCallbackConcurrentUnloadWaitsForInFlight(t *testing.T) {
+	releaseRequest := make(chan struct{})
+	requestStarted := make(chan struct{})
+	host := New()
+	host.SetModelExecutor(&fakeHostModelExecutor{
+		executeModel: func(context.Context, handlers.ModelExecutionRequest) (handlers.ModelExecutionResponse, *interfaces.ErrorMessage) {
+			close(requestStarted)
+			<-releaseRequest
+			return handlers.ModelExecutionResponse{StatusCode: http.StatusNoContent}, nil
+		},
+	})
+	entry := newDynamicHostCallbackEntry(host, pluginFile{ID: "sample", Path: "/plugins/sample-v1.0.0.so", Version: "1.0.0"}, 101)
+	client := &callbackLifecycleTestClient{entry: entry}
+	host.mu.Lock()
+	host.loaded["sample"] = &loadedPlugin{id: "sample", path: "/plugins/sample-v1.0.0.so", version: "1.0.0", client: newGuardedPluginClient(client)}
+	host.mu.Unlock()
+
+	rawRequest, errMarshal := json.Marshal(rpcHostModelExecutionRequest{HostModelExecutionRequest: pluginapi.HostModelExecutionRequest{Model: "model-1"}})
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+	callbackDone := make(chan error, 1)
+	go func() {
+		_, errCall := dispatchDynamicHostCallback(entry, pluginabi.MethodHostModelExecute, rawRequest)
+		callbackDone <- errCall
+	}()
+	<-requestStarted
+
+	unloadDone := make(chan bool, 1)
+	go func() {
+		unloadDone <- host.UnloadPlugin("sample")
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		entry.mu.Lock()
+		active := entry.active
+		entry.mu.Unlock()
+		if !active {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("UnloadPlugin did not revoke callbacks")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-unloadDone:
+		t.Fatal("UnloadPlugin returned before the in-flight callback drained")
+	default:
+	}
+	if _, errCall := dispatchDynamicHostCallback(entry, pluginabi.MethodHostLog, []byte(`{"level":"info","message":"denied"}`)); errCall == nil {
+		t.Fatal("retired callback generation accepted a new call")
+	}
+
+	close(releaseRequest)
+	if errCall := <-callbackDone; errCall != nil {
+		t.Fatalf("in-flight callback error: %v", errCall)
+	}
+	select {
+	case unloaded := <-unloadDone:
+		if !unloaded {
+			t.Fatal("UnloadPlugin returned false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UnloadPlugin did not finish after callback drain")
+	}
+}
+
+func TestDynamicHostCallbackHotReloadRevokesOldGeneration(t *testing.T) {
+	host := New()
+	oldEntry := newDynamicHostCallbackEntry(host, pluginFile{ID: "sample", Path: "/plugins/sample-v1.0.0.so", Version: "1.0.0"}, 201)
+	newEntry := newDynamicHostCallbackEntry(host, pluginFile{ID: "sample", Path: "/plugins/sample-v1.1.0.so", Version: "1.1.0"}, 202)
+	oldClient := &callbackLifecycleTestClient{entry: oldEntry}
+
+	host.mu.Lock()
+	host.retireLoadedPluginLocked(&loadedPlugin{id: "sample", path: oldEntry.generation.path, version: oldEntry.generation.version, client: newGuardedPluginClient(oldClient)})
+	host.mu.Unlock()
+
+	request := []byte(`{"level":"info","message":"generation-check"}`)
+	if _, errCall := dispatchDynamicHostCallback(oldEntry, pluginabi.MethodHostLog, request); errCall == nil {
+		t.Fatal("old callback generation remained authorized after hot reload")
+	}
+	if _, errCall := dispatchDynamicHostCallback(newEntry, pluginabi.MethodHostLog, request); errCall != nil {
+		t.Fatalf("new callback generation rejected: %v", errCall)
+	}
+	if oldEntry.generation.pluginID != newEntry.generation.pluginID || oldEntry.generation.path == newEntry.generation.path || oldEntry.generation.version == newEntry.generation.version || oldEntry.generation.nonce == newEntry.generation.nonce {
+		t.Fatalf("generation identities are not unique: old=%+v new=%+v", oldEntry.generation, newEntry.generation)
+	}
+}
+
+type callbackLifecycleTestClient struct {
+	entry *dynamicHostCallbackEntry
+}
+
+func (c *callbackLifecycleTestClient) Call(context.Context, string, []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (c *callbackLifecycleTestClient) revokeHostCallbacks() {
+	c.entry.revoke()
+}
+
+func (c *callbackLifecycleTestClient) Shutdown() {
+	c.revokeHostCallbacks()
+	c.entry.wait()
 }

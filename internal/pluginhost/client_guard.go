@@ -57,6 +57,22 @@ type guardedPluginCallResult struct {
 	recovered any
 }
 
+type hostCallbackRevoker interface {
+	revokeHostCallbacks()
+}
+
+func (c *guardedPluginClient) revokeHostCallbacks() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	inner := c.inner
+	c.mu.Unlock()
+	if revoker, ok := inner.(hostCallbackRevoker); ok {
+		revoker.revokeHostCallbacks()
+	}
+}
+
 func (c *guardedPluginClient) acquire() (pluginClient, error) {
 	if c == nil {
 		return nil, fmt.Errorf("plugin client is closed")
@@ -108,6 +124,10 @@ func (c *guardedPluginClient) ShutdownContext(ctx context.Context) {
 	c.inner = nil
 	done := c.shutdownDone
 	c.mu.Unlock()
+
+	if revoker, ok := inner.(hostCallbackRevoker); ok {
+		revoker.revokeHostCallbacks()
+	}
 
 	go func() {
 		c.mu.Lock()

@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginpolicy"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
@@ -43,11 +44,14 @@ func emptySnapshot() *Snapshot {
 }
 
 func (h *Host) activeRecords() []capabilityRecord {
+	if pluginpolicy.Disabled() {
+		return nil
+	}
 	return h.activeRecordsFromSnapshot(h.Snapshot())
 }
 
 func (h *Host) activeRecordsFromSnapshot(snap *Snapshot) []capabilityRecord {
-	if snap == nil || len(snap.records) == 0 {
+	if pluginpolicy.Disabled() || snap == nil || len(snap.records) == 0 {
 		return nil
 	}
 	out := make([]capabilityRecord, 0, len(snap.records))

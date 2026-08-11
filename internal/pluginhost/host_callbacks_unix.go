@@ -14,7 +14,6 @@ typedef struct {
 import "C"
 
 import (
-	"context"
 	"unsafe"
 )
 
@@ -32,16 +31,20 @@ func cliproxyHostCall(hostCtx unsafe.Pointer, method *C.char, request *C.uint8_t
 	if !okHost {
 		return 1
 	}
-	entry, okHost := rawHost.(dynamicHostCallbackEntry)
-	if !okHost || entry.host == nil {
+	entry, okHost := rawHost.(*dynamicHostCallbackEntry)
+	if !okHost || entry == nil {
 		return 1
 	}
+	host, generation, active := entry.acquire()
+	if host == nil {
+		return 1
+	}
+	defer entry.release()
 	var requestBytes []byte
 	if request != nil && requestLen > 0 {
 		requestBytes = C.GoBytes(unsafe.Pointer(request), C.int(requestLen))
 	}
-	ctx := withHostCallbackPluginID(context.Background(), entry.pluginID)
-	resp, errCall := entry.host.callFromPlugin(ctx, C.GoString(method), requestBytes)
+	resp, errCall := dispatchAcquiredDynamicHostCallback(host, generation, active, C.GoString(method), requestBytes)
 	if errCall != nil {
 		resp = marshalRPCError("host_call_failed", errCall.Error())
 	}

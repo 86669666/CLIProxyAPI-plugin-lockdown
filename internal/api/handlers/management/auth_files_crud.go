@@ -33,22 +33,27 @@ func (h *Handler) DownloadAuthFile(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "name must end with .json"})
 		return
 	}
-	full := filepath.Join(h.cfg.AuthDir, name)
-	data, err := os.ReadFile(full)
-	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(404, gin.H{"error": "file not found"})
+	file, errOpen := safeOpenBeneath(h.cfg.AuthDir, name)
+	if errOpen != nil {
+		if errors.Is(errOpen, errUnsafeFilePath) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid name"})
+		} else if os.IsNotExist(errOpen) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
 		} else {
-			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read file: %v", err)})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read file: %v", errOpen)})
 		}
 		return
 	}
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", name))
-	c.Data(200, "application/json", data)
+	defer file.Close()
+	c.Header("Content-Type", "application/json")
+	if errServe := serveFileAttachment(c, file, name); errServe != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to serve file: %v", errServe)})
+	}
 }
 
 // Upload auth file: multipart or raw JSON with ?name=
 func (h *Handler) UploadAuthFile(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, uploadRequestMaxBytes)
 	if h.authManager == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
 		return
@@ -57,11 +62,19 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 
 	fileHeaders, errMultipart := h.multipartAuthFileHeaders(c)
 	if errMultipart != nil {
+		if isRequestBodyTooLarge(errMultipart) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request entity too large"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid multipart form: %v", errMultipart)})
 		return
 	}
 	if len(fileHeaders) == 1 {
 		if _, errUpload := h.storeUploadedAuthFile(ctx, fileHeaders[0]); errUpload != nil {
+			if errors.Is(errUpload, errUploadedFileTooLarge) {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errUpload.Error()})
+				return
+			}
 			if errors.Is(errUpload, errAuthFileMustBeJSON) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "file must be .json"})
 				return
@@ -118,7 +131,15 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 	}
 	data, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		c.JSON(400, gin.H{"error": "failed to read body"})
+		if isRequestBodyTooLarge(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request entity too large"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+		return
+	}
+	if int64(len(data)) > uploadedFileMaxBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": errUploadedFileTooLarge.Error()})
 		return
 	}
 	if err = h.writeAuthFile(ctx, filepath.Base(name), data); err != nil {
@@ -238,6 +259,9 @@ func (h *Handler) storeUploadedAuthFile(ctx context.Context, file *multipart.Fil
 	if file == nil {
 		return "", fmt.Errorf("no file uploaded")
 	}
+	if file.Size > uploadedFileMaxBytes {
+		return "", errUploadedFileTooLarge
+	}
 	name := filepath.Base(strings.TrimSpace(file.Filename))
 	if !strings.HasSuffix(strings.ToLower(name), ".json") {
 		return "", errAuthFileMustBeJSON
@@ -248,9 +272,12 @@ func (h *Handler) storeUploadedAuthFile(ctx context.Context, file *multipart.Fil
 	}
 	defer src.Close()
 
-	data, err := io.ReadAll(src)
+	data, err := io.ReadAll(io.LimitReader(src, uploadedFileMaxBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("failed to read uploaded file: %w", err)
+	}
+	if int64(len(data)) > uploadedFileMaxBytes {
+		return "", errUploadedFileTooLarge
 	}
 	if err := h.writeAuthFile(ctx, name, data); err != nil {
 		return "", err

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	managementHandlers "github.com/router-for-me/CLIProxyAPI/v7/internal/api/handlers/management"
+	apimiddleware "github.com/router-for-me/CLIProxyAPI/v7/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/managementasset"
 	log "github.com/sirupsen/logrus"
 )
@@ -21,24 +23,26 @@ func (s *Server) registerManagementRoutes() {
 
 	log.Info("management routes registered after secret key configuration")
 
-	s.engine.POST("/v0/management/oauth-callback", s.managementAvailabilityMiddleware(), s.mgmt.PostOAuthCallback)
+	s.engine.POST("/v0/management/oauth-callback", s.managementAvailabilityMiddleware(), managementHandlers.ManagementBodyLimitMiddleware(), s.mgmt.PostOAuthCallback)
 	s.engine.GET("/v0/management/oauth-callback", s.managementAvailabilityMiddleware(), s.mgmt.GetOAuthCallback)
 
 	mgmt := s.engine.Group("/v0/management")
-	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
+	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware(), managementHandlers.ManagementBodyLimitMiddleware())
 	{
 		mgmt.GET("/config", s.mgmt.GetConfig)
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)
 		mgmt.GET("/latest-version", s.mgmt.GetLatestVersion)
-		mgmt.GET("/plugins", s.mgmt.ListPlugins)
-		mgmt.GET("/plugin-store", s.mgmt.ListPluginStore)
-		mgmt.POST("/plugin-store/:id/install", s.mgmt.InstallPluginFromStore)
-		mgmt.DELETE("/plugins/:id", s.mgmt.DeletePlugin)
-		mgmt.PATCH("/plugins/:id/enabled", s.mgmt.PatchPluginEnabled)
-		mgmt.GET("/plugins/:id/config", s.mgmt.GetPluginConfig)
-		mgmt.PUT("/plugins/:id/config", s.mgmt.PutPluginConfig)
-		mgmt.PATCH("/plugins/:id/config", s.mgmt.PatchPluginConfig)
+		plugins := mgmt.Group("")
+		plugins.Use(apimiddleware.PluginCapabilityMiddleware())
+		plugins.GET("/plugins", s.mgmt.ListPlugins)
+		plugins.GET("/plugin-store", s.mgmt.ListPluginStore)
+		plugins.POST("/plugin-store/:id/install", s.mgmt.InstallPluginFromStore)
+		plugins.DELETE("/plugins/:id", s.mgmt.DeletePlugin)
+		plugins.PATCH("/plugins/:id/enabled", s.mgmt.PatchPluginEnabled)
+		plugins.GET("/plugins/:id/config", s.mgmt.GetPluginConfig)
+		plugins.PUT("/plugins/:id/config", s.mgmt.PutPluginConfig)
+		plugins.PATCH("/plugins/:id/config", s.mgmt.PatchPluginConfig)
 
 		mgmt.GET("/debug", s.mgmt.GetDebug)
 		mgmt.PUT("/debug", s.mgmt.PutDebug)
@@ -245,10 +249,17 @@ func (s *Server) pluginManagementNoRoute(c *gin.Context) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
+	if !apimiddleware.RequirePluginCapability(c) {
+		return
+	}
 	if !s.managementAvailable(c) {
 		return
 	}
 	s.mgmt.Middleware()(c)
+	if c.IsAborted() {
+		return
+	}
+	managementHandlers.ManagementBodyLimitMiddleware()(c)
 	if c.IsAborted() {
 		return
 	}
@@ -272,6 +283,9 @@ func (s *Server) pluginResourceNoRoute(c *gin.Context) {
 	}
 	if s.cfg == nil || s.cfg.Home.Enabled || s.pluginHost == nil {
 		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	if !apimiddleware.RequirePluginCapability(c) {
 		return
 	}
 	if s.pluginHost.ServeResourceHTTP(c.Writer, c.Request) {

@@ -57,11 +57,13 @@ const (
 type dynamicLibraryLoader struct{}
 
 type dynamicLibraryClient struct {
-	dll      *syscall.DLL
-	tempPath string
-	hostAPI  *windowsHostAPI
-	hostCtx  *uintptr
-	api      windowsPluginAPI
+	dll            *syscall.DLL
+	tempPath       string
+	hostAPI        *windowsHostAPI
+	hostCtx        *uintptr
+	hostCallbackID uintptr
+	hostCallback   *dynamicHostCallbackEntry
+	api            windowsPluginAPI
 }
 
 func defaultPluginLoader() pluginLoader {
@@ -87,11 +89,14 @@ func (dynamicLibraryLoader) Open(file pluginFile, host *Host) (pluginClient, err
 	id := windowsHostCallbackID.Add(1)
 	hostCtx := new(uintptr)
 	*hostCtx = id
-	windowsHostCallbackEntries.Store(id, dynamicHostCallbackEntry{host: host, pluginID: file.ID})
+	hostCallback := newDynamicHostCallbackEntry(host, file, id)
+	windowsHostCallbackEntries.Store(id, hostCallback)
 	client := &dynamicLibraryClient{
-		dll:      dll,
-		tempPath: loadPath,
-		hostCtx:  hostCtx,
+		dll:            dll,
+		tempPath:       loadPath,
+		hostCtx:        hostCtx,
+		hostCallbackID: id,
+		hostCallback:   hostCallback,
 		hostAPI: &windowsHostAPI{
 			abiVersion: pluginHostABIVersion,
 			hostCtx:    uintptr(unsafe.Pointer(hostCtx)),
@@ -322,14 +327,19 @@ func (c *dynamicLibraryClient) close(releaseDLL bool) {
 	if c == nil {
 		return
 	}
+	c.revokeHostCallbacks()
 	if c.api.shutdown != 0 {
 		_, _, _ = syscall.SyscallN(c.api.shutdown)
 		c.api.shutdown = 0
 	}
+	if c.hostCallback != nil {
+		c.hostCallback.wait()
+	}
+	windowsHostCallbackEntries.Delete(c.hostCallbackID)
 	if c.hostCtx != nil {
-		windowsHostCallbackEntries.Delete(*c.hostCtx)
 		c.hostCtx = nil
 	}
+	c.hostCallback = nil
 	if c.dll != nil {
 		if releaseDLL {
 			_ = c.dll.Release()
@@ -338,6 +348,13 @@ func (c *dynamicLibraryClient) close(releaseDLL bool) {
 	}
 	removeShadowPlugin(c.tempPath)
 	c.tempPath = ""
+}
+
+func (c *dynamicLibraryClient) revokeHostCallbacks() {
+	if c == nil || c.hostCallback == nil {
+		return
+	}
+	c.hostCallback.revoke()
 }
 
 func windowsHostCall(hostCtx uintptr, methodPtr uintptr, requestPtr uintptr, requestLen uintptr, responsePtr uintptr) uintptr {
@@ -354,17 +371,21 @@ func windowsHostCall(hostCtx uintptr, methodPtr uintptr, requestPtr uintptr, req
 	if !okHost {
 		return 1
 	}
-	entry, okHost := rawHost.(dynamicHostCallbackEntry)
-	if !okHost || entry.host == nil {
+	entry, okHost := rawHost.(*dynamicHostCallbackEntry)
+	if !okHost || entry == nil {
 		return 1
 	}
+	host, generation, active := entry.acquire()
+	if host == nil {
+		return 1
+	}
+	defer entry.release()
 	var request []byte
 	if requestPtr != 0 && requestLen > 0 {
 		request = unsafe.Slice((*byte)(unsafe.Pointer(requestPtr)), requestLen)
 		request = append([]byte(nil), request...)
 	}
-	ctx := withHostCallbackPluginID(context.Background(), entry.pluginID)
-	resp, errCall := entry.host.callFromPlugin(ctx, windowsString(methodPtr), request)
+	resp, errCall := dispatchAcquiredDynamicHostCallback(host, generation, active, windowsString(methodPtr), request)
 	if errCall != nil {
 		resp = marshalRPCError("host_call_failed", errCall.Error())
 	}

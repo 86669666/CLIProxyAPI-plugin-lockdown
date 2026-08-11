@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -109,8 +108,13 @@ func WriteConfig(path string, data []byte) error {
 }
 
 func (h *Handler) PutConfigYAML(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, configYAMLMaxBodyBytes)
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request_entity_too_large"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_yaml", "message": "cannot read request body"})
 		return
 	}
@@ -124,8 +128,7 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		return
 	}
 	// Validate config using LoadConfigOptional with optional=false to enforce parsing
-	tmpDir := filepath.Dir(h.configFilePath)
-	tmpFile, err := os.CreateTemp(tmpDir, "config-validate-*.yaml")
+	tmpFile, err := os.CreateTemp("", "config-validate-*.yaml")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "write_failed", "message": err.Error()})
 		return

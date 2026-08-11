@@ -407,3 +407,44 @@ func TestPluginTokenStorageRejectsEmptyPayload(t *testing.T) {
 		t.Fatal("SaveTokenToFile() error = nil, want empty payload error")
 	}
 }
+
+func TestAuthProviderPolicyPreventsParseAndRefreshCalls(t *testing.T) {
+	parseCalls := 0
+	refreshCalls := 0
+	host := newHostWithRecords(capabilityRecord{
+		id: "auth-plugin",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+			AuthProvider: fakeAuthProvider{
+				identifier: "plugin-provider",
+				parseAuth: func(context.Context, pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error) {
+					parseCalls++
+					return pluginapi.AuthParseResponse{Handled: true, Auth: pluginapi.AuthData{Provider: "plugin-provider", ID: "auth-1"}}, nil
+				},
+				refreshAuth: func(context.Context, pluginapi.AuthRefreshRequest) (pluginapi.AuthRefreshResponse, error) {
+					refreshCalls++
+					return pluginapi.AuthRefreshResponse{Auth: pluginapi.AuthData{Provider: "plugin-provider", ID: "auth-1"}}, nil
+				},
+			},
+		}},
+	})
+
+	auth, handled, errParse := host.ParseAuth(context.Background(), pluginapi.AuthParseRequest{Provider: "plugin-provider"})
+	if errParse != nil || !handled || auth == nil || parseCalls != 1 {
+		t.Fatalf("ParseAuth() before policy = auth %#v handled %v err %v calls %d", auth, handled, errParse, parseCalls)
+	}
+	authBeforePolicy := auth
+	if _, handled, errRefresh := host.RefreshAuth(context.Background(), auth); errRefresh != nil || !handled || refreshCalls != 1 {
+		t.Fatalf("RefreshAuth() before policy = handled %v err %v calls %d", handled, errRefresh, refreshCalls)
+	}
+
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	if auth, handled, errParse = host.ParseAuth(context.Background(), pluginapi.AuthParseRequest{Provider: "plugin-provider"}); errParse != nil || handled || auth != nil {
+		t.Fatalf("ParseAuth() after policy = auth %#v handled %v err %v, want nil false nil", auth, handled, errParse)
+	}
+	if refreshed, handled, errRefresh := host.RefreshAuth(context.Background(), authBeforePolicy); errRefresh != nil || handled || refreshed != nil {
+		t.Fatalf("RefreshAuth() after policy = auth %#v handled %v err %v, want nil false nil", refreshed, handled, errRefresh)
+	}
+	if parseCalls != 1 || refreshCalls != 1 {
+		t.Fatalf("plugin calls after policy = parse %d refresh %d, want 1/1", parseCalls, refreshCalls)
+	}
+}

@@ -734,3 +734,25 @@ func appendMainLog(t *testing.T, dir, content string) {
 		t.Fatalf("close main log: %v", errClose)
 	}
 }
+
+func TestDownloadRequestErrorLogRejectsSymlink(t *testing.T) {
+	logDir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.log")
+	if errWrite := os.WriteFile(outside, []byte("secret"), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	name := "error-linked.log"
+	if errLink := os.Symlink(outside, filepath.Join(logDir, name)); errLink != nil {
+		t.Skipf("symlink unavailable: %v", errLink)
+	}
+	h := NewHandlerWithoutConfigFilePath(&config.Config{}, nil)
+	h.SetLogDirectory(logDir)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Params = gin.Params{{Key: "name", Value: name}}
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/request-error-logs/"+name, nil)
+	h.DownloadRequestErrorLog(ctx)
+	if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("symlink served: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

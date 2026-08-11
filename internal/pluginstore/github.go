@@ -17,6 +17,7 @@ import (
 
 const userAgent = "CLIProxyAPI"
 const maxPluginStoreRedirects = 10
+const maxPluginDownloadSize int64 = 64 << 20
 
 // HTTPDoer abstracts the HTTP client used to execute requests.
 type HTTPDoer = httpfetch.Doer
@@ -128,7 +129,7 @@ func (c Client) DownloadAsset(ctx context.Context, asset ReleaseAsset) ([]byte, 
 	if downloadURL == "" {
 		return nil, fmt.Errorf("asset %q missing download url", asset.Name)
 	}
-	return c.get(ctx, downloadURL, "application/octet-stream", RequestKindArtifact, 0)
+	return c.get(ctx, downloadURL, "application/octet-stream", RequestKindArtifact, maxPluginDownloadSize)
 }
 
 func (c Client) releaseAssetAPIAuthenticated(apiURL string) bool {
@@ -143,6 +144,9 @@ func (c Client) releaseAssetAPIAuthenticated(apiURL string) bool {
 }
 
 func (c Client) get(ctx context.Context, requestURL string, accept string, kind string, maxSize int64) ([]byte, error) {
+	if maxSize <= 0 || maxSize > maxPluginDownloadSize {
+		maxSize = maxPluginDownloadSize
+	}
 	currentURL := strings.TrimSpace(requestURL)
 	for redirects := 0; ; redirects++ {
 		if errURL := validatePluginStoreRequestURL(c.Auth, currentURL, kind); errURL != nil {
@@ -271,6 +275,9 @@ func readPluginStoreResponse(resp *http.Response, maxSize int64, authenticated b
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if maxSize > 0 && resp.ContentLength > maxSize {
+		return nil, fmt.Errorf("response exceeds maximum allowed size of %d bytes", maxSize)
 	}
 	reader := io.Reader(resp.Body)
 	if maxSize > 0 {
