@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -445,6 +446,375 @@ func TestRedactHeadersSensitiveVariants(t *testing.T) {
 	}
 }
 
+func TestFileRequestLogger_HomeEnabled_BoundsAllNonStreamingSectionsWithoutMutatingInputs(t *testing.T) {
+	originalClient := currentHomeRequestLogClient
+	defer func() { currentHomeRequestLogClient = originalClient }()
+
+	stub := &stubHomeRequestLogClient{heartbeatOK: true}
+	currentHomeRequestLogClient = func() homeRequestLogClient { return stub }
+	logger := NewFileRequestLogger(true, t.TempDir(), "", 0)
+	logger.SetHomeEnabled(true)
+
+	requestBody := bytes.Repeat([]byte("q"), homeRequestBodyMaxBytes+257)
+	responseBody := bytes.Repeat([]byte("s"), homeStreamingResponseBodyMaxBytes+257)
+	apiRequest := bytes.Repeat([]byte("a"), homeAPIRequestMaxBytes+257)
+	apiResponse := bytes.Repeat([]byte("b"), homeAPIResponseMaxBytes+257)
+	apiTimeline := bytes.Repeat([]byte("t"), homeAPIWebsocketTimelineMaxBytes+257)
+	requestBodyBefore := bytes.Clone(requestBody)
+	responseBodyBefore := bytes.Clone(responseBody)
+	apiRequestBefore := bytes.Clone(apiRequest)
+	apiResponseBefore := bytes.Clone(apiResponse)
+	apiTimelineBefore := bytes.Clone(apiTimeline)
+
+	errLog := logger.LogRequest(
+		"/v1/responses",
+		http.MethodPost,
+		map[string][]string{"Authorization": {"Bearer secret"}},
+		requestBody,
+		http.StatusOK,
+		map[string][]string{"Set-Cookie": {"session=secret"}},
+		responseBody,
+		nil,
+		apiRequest,
+		apiResponse,
+		apiTimeline,
+		nil,
+		"bounded-non-streaming",
+		time.Now(),
+		time.Now(),
+	)
+	if errLog != nil {
+		t.Fatalf("LogRequest error: %v", errLog)
+	}
+	if len(stub.pushed) != 1 {
+		t.Fatalf("home pushed records = %d, want 1", len(stub.pushed))
+	}
+	if len(stub.pushed[0]) > homeRequestLogPayloadMaxBytes {
+		t.Fatalf("home payload length = %d, want <= %d", len(stub.pushed[0]), homeRequestLogPayloadMaxBytes)
+	}
+
+	var got homeRequestLogPayload
+	if errUnmarshal := json.Unmarshal(stub.pushed[0], &got); errUnmarshal != nil {
+		t.Fatalf("unmarshal payload: %v", errUnmarshal)
+	}
+	if len(got.RequestLog) > homeRequestLogTextMaxBytes {
+		t.Fatalf("request log length = %d, want <= %d", len(got.RequestLog), homeRequestLogTextMaxBytes)
+	}
+	for _, marker := range []string{
+		homeRequestBodyTruncatedMarker,
+		homeResponseBodyTruncatedMarker,
+		homeAPIRequestTruncatedMarker,
+		homeAPIResponseTruncatedMarker,
+		homeAPIWebsocketTruncatedMarker,
+	} {
+		if !strings.Contains(got.RequestLog, marker) {
+			t.Fatalf("request log missing marker %q", marker)
+		}
+	}
+	if strings.Contains(got.RequestLog, "Bearer secret") || strings.Contains(got.RequestLog, "session=secret") {
+		t.Fatal("request log leaked redacted header data")
+	}
+	for name, pair := range map[string][2][]byte{
+		"request body":  {requestBody, requestBodyBefore},
+		"response body": {responseBody, responseBodyBefore},
+		"API request":   {apiRequest, apiRequestBefore},
+		"API response":  {apiResponse, apiResponseBefore},
+		"API timeline":  {apiTimeline, apiTimelineBefore},
+	} {
+		if !bytes.Equal(pair[0], pair[1]) {
+			t.Fatalf("%s input was modified", name)
+		}
+	}
+}
+
+func TestHomeStreamingLogWriter_BoundsConstructionFieldsWithoutMutatingInputs(t *testing.T) {
+	originalClient := currentHomeRequestLogClient
+	defer func() { currentHomeRequestLogClient = originalClient }()
+
+	stub := &stubHomeRequestLogClient{heartbeatOK: true}
+	currentHomeRequestLogClient = func() homeRequestLogClient { return stub }
+
+	requestBody := bytes.Repeat([]byte("r"), homeRequestBodyMaxBytes+257)
+	apiRequest := bytes.Repeat([]byte("q"), homeAPIRequestMaxBytes+257)
+	apiResponse := bytes.Repeat([]byte("p"), homeAPIResponseMaxBytes+257)
+	apiTimeline := bytes.Repeat([]byte("w"), homeAPIWebsocketTimelineMaxBytes+257)
+	requestBodyBefore := bytes.Clone(requestBody)
+	apiRequestBefore := bytes.Clone(apiRequest)
+	apiResponseBefore := bytes.Clone(apiResponse)
+	apiTimelineBefore := bytes.Clone(apiTimeline)
+
+	writer := newHomeStreamingLogWriter("/v1/responses", http.MethodPost, nil, requestBody, "bounded-construction")
+	if errWrite := writer.WriteAPIRequest(apiRequest); errWrite != nil {
+		t.Fatalf("WriteAPIRequest error: %v", errWrite)
+	}
+	if errWrite := writer.WriteAPIResponse(apiResponse); errWrite != nil {
+		t.Fatalf("WriteAPIResponse error: %v", errWrite)
+	}
+	if errWrite := writer.WriteAPIWebsocketTimeline(apiTimeline); errWrite != nil {
+		t.Fatalf("WriteAPIWebsocketTimeline error: %v", errWrite)
+	}
+
+	for name, bounded := range map[string]struct {
+		payload []byte
+		max     int
+		marker  string
+	}{
+		"request body": {writer.requestBody, homeRequestBodyMaxBytes, homeRequestBodyTruncatedMarker},
+		"API request":  {writer.apiRequest, homeAPIRequestMaxBytes, homeAPIRequestTruncatedMarker},
+		"API response": {writer.apiResponse, homeAPIResponseMaxBytes, homeAPIResponseTruncatedMarker},
+		"API timeline": {writer.apiWebsocketTime, homeAPIWebsocketTimelineMaxBytes, homeAPIWebsocketTruncatedMarker},
+	} {
+		if len(bounded.payload) > bounded.max {
+			t.Fatalf("%s length = %d, want <= %d", name, len(bounded.payload), bounded.max)
+		}
+		if !bytes.Contains(bounded.payload, []byte(bounded.marker)) {
+			t.Fatalf("%s missing marker %q", name, bounded.marker)
+		}
+	}
+	for name, pair := range map[string][2][]byte{
+		"request body": {requestBody, requestBodyBefore},
+		"API request":  {apiRequest, apiRequestBefore},
+		"API response": {apiResponse, apiResponseBefore},
+		"API timeline": {apiTimeline, apiTimelineBefore},
+	} {
+		if !bytes.Equal(pair[0], pair[1]) {
+			t.Fatalf("%s input was modified", name)
+		}
+	}
+
+	if errClose := writer.Close(); errClose != nil {
+		t.Fatalf("Close error: %v", errClose)
+	}
+	if len(stub.pushed) != 1 {
+		t.Fatalf("home pushed records = %d, want 1", len(stub.pushed))
+	}
+	if len(stub.pushed[0]) > homeRequestLogPayloadMaxBytes {
+		t.Fatalf("home payload length = %d, want <= %d", len(stub.pushed[0]), homeRequestLogPayloadMaxBytes)
+	}
+}
+
+func TestFileRequestLogger_HomeEnabled_BoundsHugeFileBackedPartSets(t *testing.T) {
+	originalClient := currentHomeRequestLogClient
+	defer func() { currentHomeRequestLogClient = originalClient }()
+
+	stub := &stubHomeRequestLogClient{heartbeatOK: true}
+	currentHomeRequestLogClient = func() homeRequestLogClient { return stub }
+	logsDir := t.TempDir()
+	logger := NewFileRequestLogger(true, logsDir, "", 0)
+	logger.SetHomeEnabled(true)
+
+	newFloodedSource := func(prefix string, content []byte) (*FileBodySource, string) {
+		t.Helper()
+		source, errSource := logger.NewFileBodySource(prefix)
+		if errSource != nil {
+			t.Fatalf("NewFileBodySource(%s): %v", prefix, errSource)
+		}
+		file, errCreate := source.CreatePart("flood")
+		if errCreate != nil {
+			t.Fatalf("CreatePart(%s): %v", prefix, errCreate)
+		}
+		if len(content) > 0 {
+			if _, errWrite := file.Write(content); errWrite != nil {
+				t.Fatalf("write part(%s): %v", prefix, errWrite)
+			}
+		}
+		if errClose := file.Close(); errClose != nil {
+			t.Fatalf("close part(%s): %v", prefix, errClose)
+		}
+		path := file.Name()
+		source.mu.Lock()
+		source.paths = make([]string, 100_000)
+		for index := range source.paths {
+			source.paths[index] = path
+		}
+		source.mu.Unlock()
+		return source, path
+	}
+
+	websocketSource, websocketPath := newFloodedSource("websocket", nil)
+	apiRequestSource, apiRequestPath := newFloodedSource("api-request", []byte("small-api-request"))
+	apiResponseSource, apiResponsePath := newFloodedSource("api-response", nil)
+	apiTimelineSource, apiTimelinePath := newFloodedSource("api-timeline", []byte("small-api-timeline"))
+
+	errLog := logger.LogRequestWithOptionsAndAllSources(
+		"/v1/responses", http.MethodPost, nil, nil, http.StatusOK, nil, nil,
+		nil, websocketSource, nil, apiRequestSource, nil, apiResponseSource, nil, apiTimelineSource,
+		nil, false, "huge-file-parts", time.Now(), time.Now(),
+	)
+	if errLog != nil {
+		t.Fatalf("LogRequestWithOptionsAndAllSources error: %v", errLog)
+	}
+	if len(stub.pushed) != 1 {
+		t.Fatalf("home pushed records = %d, want 1", len(stub.pushed))
+	}
+	if len(stub.pushed[0]) > homeRequestLogPayloadMaxBytes {
+		t.Fatalf("home payload length = %d, want <= %d", len(stub.pushed[0]), homeRequestLogPayloadMaxBytes)
+	}
+
+	var got homeRequestLogPayload
+	if errUnmarshal := json.Unmarshal(stub.pushed[0], &got); errUnmarshal != nil {
+		t.Fatalf("unmarshal payload: %v", errUnmarshal)
+	}
+	for _, marker := range []string{
+		homeWebsocketTruncatedMarker,
+		homeAPIRequestTruncatedMarker,
+		homeAPIResponseTruncatedMarker,
+		homeAPIWebsocketTruncatedMarker,
+	} {
+		if !strings.Contains(got.RequestLog, marker) {
+			t.Fatalf("request log missing marker %q", marker)
+		}
+	}
+	if strings.Count(got.RequestLog, "small-api-request") > homeFileSectionMaxParts {
+		t.Fatal("API request source read more than the part limit")
+	}
+	if strings.Count(got.RequestLog, "small-api-timeline") > homeFileSectionMaxParts {
+		t.Fatal("API timeline source read more than the part limit")
+	}
+	assertFileBodySourceCleaned(t, []string{websocketPath, apiRequestPath, apiResponsePath, apiTimelinePath})
+}
+
+func TestFileRequestLogger_HomeEnabled_BoundsHeadersBeforeFormattingAndMarshal(t *testing.T) {
+	originalClient := currentHomeRequestLogClient
+	defer func() { currentHomeRequestLogClient = originalClient }()
+
+	stub := &stubHomeRequestLogClient{heartbeatOK: true}
+	currentHomeRequestLogClient = func() homeRequestLogClient { return stub }
+	logger := NewFileRequestLogger(true, t.TempDir(), "", 0)
+	logger.SetHomeEnabled(true)
+
+	requestSecret := strings.Repeat("request-secret-", homeHeaderValueMaxBytes)
+	responseSecret := strings.Repeat("response-secret-", homeHeaderValueMaxBytes)
+	requestHeaders := map[string][]string{
+		"Authorization": {"Bearer " + requestSecret},
+		"Cookie":        {"session=" + requestSecret},
+		"X-Many-Values": make([]string, 10_000),
+	}
+	for index := range requestHeaders["X-Many-Values"] {
+		requestHeaders["X-Many-Values"][index] = fmt.Sprintf("value-%d", index)
+	}
+	responseHeaders := map[string][]string{
+		"Set-Cookie": {"session=" + responseSecret},
+	}
+	for index := 0; index < 1_000; index++ {
+		requestHeaders[fmt.Sprintf("X-Secret-Request-%05d", index)] = []string{fmt.Sprintf("count-secret-request-%05d", index)}
+		responseHeaders[fmt.Sprintf("X-Secret-Response-%05d", index)] = []string{fmt.Sprintf("count-secret-response-%05d", index)}
+	}
+	requestBefore := cloneHeaders(requestHeaders)
+	responseBefore := cloneHeaders(responseHeaders)
+
+	errLog := logger.LogRequest(
+		"/v1/chat/completions", http.MethodPost, requestHeaders, nil, http.StatusOK,
+		responseHeaders, nil, nil, nil, nil, nil, nil, "huge-headers", time.Now(), time.Now(),
+	)
+	if errLog != nil {
+		t.Fatalf("LogRequest error: %v", errLog)
+	}
+	if len(stub.pushed) != 1 {
+		t.Fatalf("home pushed records = %d, want 1", len(stub.pushed))
+	}
+	if len(stub.pushed[0]) > homeRequestLogPayloadMaxBytes {
+		t.Fatalf("home payload length = %d, want <= %d", len(stub.pushed[0]), homeRequestLogPayloadMaxBytes)
+	}
+
+	var got homeRequestLogPayload
+	if errUnmarshal := json.Unmarshal(stub.pushed[0], &got); errUnmarshal != nil {
+		t.Fatalf("unmarshal payload: %v", errUnmarshal)
+	}
+	if got.Headers[homeHeadersTruncatedKey][0] != homeHeadersTruncatedMarker {
+		t.Fatalf("structured headers missing truncation marker: %#v", got.Headers[homeHeadersTruncatedKey])
+	}
+	if !strings.Contains(got.RequestLog, homeHeadersTruncatedKey+": "+homeHeadersTruncatedMarker) {
+		t.Fatal("text request log missing header truncation marker")
+	}
+	if len(got.Headers) > homeHeaderMaxKeys+1 {
+		t.Fatalf("structured header count = %d, want <= %d", len(got.Headers), homeHeaderMaxKeys+1)
+	}
+	totalBytes := 0
+	for key, values := range got.Headers {
+		if len(key) > homeHeaderKeyMaxBytes {
+			t.Fatalf("header key length = %d, want <= %d", len(key), homeHeaderKeyMaxBytes)
+		}
+		for _, value := range values {
+			if len(value) > homeHeaderValueMaxBytes {
+				t.Fatalf("header value length = %d, want <= %d", len(value), homeHeaderValueMaxBytes)
+			}
+			totalBytes += len(key) + len(value)
+		}
+	}
+	if totalBytes > homeHeadersMaxBytes {
+		t.Fatalf("structured header bytes = %d, want <= %d", totalBytes, homeHeadersMaxBytes)
+	}
+	for _, secret := range []string{
+		requestSecret[:128],
+		responseSecret[:128],
+		"session=" + requestSecret[:128],
+		"session=" + responseSecret[:128],
+		"count-secret-request-",
+		"count-secret-response-",
+	} {
+		if strings.Contains(string(stub.pushed[0]), secret) {
+			t.Fatal("Home payload leaked an original sensitive header value")
+		}
+	}
+	if !headersEqual(requestHeaders, requestBefore) {
+		t.Fatal("request headers were modified")
+	}
+	if !headersEqual(responseHeaders, responseBefore) {
+		t.Fatal("response headers were modified")
+	}
+}
+
+func headersEqual(left, right map[string][]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftValues := range left {
+		rightValues, ok := right[key]
+		if !ok || len(leftValues) != len(rightValues) {
+			return false
+		}
+		for index := range leftValues {
+			if leftValues[index] != rightValues[index] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func TestFileRequestLogger_ForwardRequestLogToHomeUsesBoundedMarshal(t *testing.T) {
+	originalClient := currentHomeRequestLogClient
+	defer func() { currentHomeRequestLogClient = originalClient }()
+
+	stub := &stubHomeRequestLogClient{heartbeatOK: true}
+	currentHomeRequestLogClient = func() homeRequestLogClient { return stub }
+	logger := NewFileRequestLogger(true, t.TempDir(), "", 0)
+	logger.SetHomeEnabled(true)
+
+	logBytes := bytes.Repeat([]byte{0x01}, homeRequestLogTextMaxBytes+257)
+	logBefore := bytes.Clone(logBytes)
+	if errForward := logger.forwardRequestLogToHome(context.Background(), nil, "bounded-forward", string(logBytes)); errForward != nil {
+		t.Fatalf("forwardRequestLogToHome error: %v", errForward)
+	}
+	if len(stub.pushed) != 1 {
+		t.Fatalf("home pushed records = %d, want 1", len(stub.pushed))
+	}
+	if len(stub.pushed[0]) > homeRequestLogPayloadMaxBytes {
+		t.Fatalf("home payload length = %d, want <= %d", len(stub.pushed[0]), homeRequestLogPayloadMaxBytes)
+	}
+	var got homeRequestLogPayload
+	if errUnmarshal := json.Unmarshal(stub.pushed[0], &got); errUnmarshal != nil {
+		t.Fatalf("unmarshal payload: %v", errUnmarshal)
+	}
+	if !strings.Contains(got.RequestLog, homeRequestLogTruncatedMarker) {
+		t.Fatalf("request log missing marker %q", homeRequestLogTruncatedMarker)
+	}
+	if !bytes.Equal(logBytes, logBefore) {
+		t.Fatal("request log input was modified")
+	}
+}
+
 func TestHomeStreamingLogWriter_BoundsResponseBodyAndMarksTruncated(t *testing.T) {
 	original := currentHomeRequestLogClient
 	defer func() { currentHomeRequestLogClient = original }()
@@ -470,8 +840,8 @@ func TestHomeStreamingLogWriter_BoundsResponseBodyAndMarksTruncated(t *testing.T
 	if errUnmarshal := json.Unmarshal(stub.pushed[0], &got); errUnmarshal != nil {
 		t.Fatalf("unmarshal payload: %v", errUnmarshal)
 	}
-	if strings.Count(got.RequestLog, string([]byte{0x7f})) != homeStreamingResponseBodyMaxBytes {
-		t.Fatalf("response body bytes = %d, want %d", strings.Count(got.RequestLog, string([]byte{0x7f})), homeStreamingResponseBodyMaxBytes)
+	if strings.Count(got.RequestLog, string([]byte{0x7f})) != homeStreamingResponseBodyMaxBytes-len(homeResponseBodyTruncatedMarker) {
+		t.Fatalf("response body bytes = %d, want %d", strings.Count(got.RequestLog, string([]byte{0x7f})), homeStreamingResponseBodyMaxBytes-len(homeResponseBodyTruncatedMarker))
 	}
 	if !strings.Contains(got.RequestLog, homeResponseBodyTruncatedMarker) {
 		t.Fatalf("request log missing %q marker", homeResponseBodyTruncatedMarker)

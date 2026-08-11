@@ -12,19 +12,24 @@ const redactedHeaderValue = "<redacted>"
 func RedactHeaders(headers map[string][]string) map[string][]string {
 	redacted := cloneHeaders(headers)
 	for key, values := range redacted {
-		lowerKey := strings.ToLower(strings.TrimSpace(key))
 		for i, value := range values {
-			switch {
-			case lowerKey == "cookie", lowerKey == "set-cookie":
-				if value != "" {
-					values[i] = redactedHeaderValue
-				}
-			case strings.Contains(lowerKey, "authorization"):
-				values[i] = util.MaskAuthorizationHeader(value)
-			case strings.Contains(lowerKey, "token"), strings.Contains(lowerKey, "key"), strings.Contains(lowerKey, "secret"):
-				values[i] = util.HideAPIKey(value)
-			}
+			values[i] = redactHeaderValue(key, value)
 		}
 	}
 	return redacted
+}
+
+func redactHeaderValue(key, value string) string {
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	switch {
+	case lowerKey == "cookie", lowerKey == "set-cookie":
+		if value != "" {
+			return redactedHeaderValue
+		}
+	case strings.Contains(lowerKey, "authorization"):
+		return util.MaskAuthorizationHeader(value)
+	case strings.Contains(lowerKey, "token"), strings.Contains(lowerKey, "key"), strings.Contains(lowerKey, "secret"):
+		return util.HideAPIKey(value)
+	}
+	return value
 }

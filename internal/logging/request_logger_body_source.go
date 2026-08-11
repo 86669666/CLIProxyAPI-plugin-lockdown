@@ -166,14 +166,131 @@ func (s *FileBodySource) Paths() []string {
 	return out
 }
 
+// ReadBounded merges at most maxParts ordered parts into memory, stopping at maxBytes.
+// The returned truncated flag reports omitted parts or bytes.
+func (s *FileBodySource) ReadBounded(maxParts int, maxBytes int) ([]byte, bool, error) {
+	if s == nil || maxParts <= 0 || maxBytes <= 0 {
+		return nil, s != nil && s.HasPayload(), nil
+	}
+
+	s.mu.Lock()
+	partCount := len(s.paths)
+	if s.cleaned || partCount == 0 {
+		s.mu.Unlock()
+		return nil, false, nil
+	}
+	if partCount > maxParts {
+		partCount = maxParts
+	}
+	s.mu.Unlock()
+
+	var out bytes.Buffer
+	out.Grow(maxBytes)
+	truncated := false
+	wrote := false
+	for index := 0; index < partCount; index++ {
+		s.mu.Lock()
+		if s.cleaned || index >= len(s.paths) {
+			s.mu.Unlock()
+			break
+		}
+		path := s.paths[index]
+		hasMoreParts := index+1 < len(s.paths)
+		s.mu.Unlock()
+
+		file, errOpen := os.Open(path)
+		if errOpen != nil {
+			if os.IsNotExist(errOpen) {
+				continue
+			}
+			return nil, false, errOpen
+		}
+
+		var firstByte [1]byte
+		firstCount, errRead := file.Read(firstByte[:])
+		if errRead != nil && errRead != io.EOF {
+			if errClose := file.Close(); errClose != nil {
+				log.WithError(errClose).Warn("failed to close bounded log part file")
+			}
+			return nil, false, errRead
+		}
+		if firstCount == 0 {
+			if errClose := file.Close(); errClose != nil {
+				return nil, false, errClose
+			}
+			continue
+		}
+
+		separatorBytes := 0
+		if wrote {
+			separatorBytes = 1
+		}
+		remaining := maxBytes - out.Len()
+		if remaining <= separatorBytes {
+			truncated = true
+			if errClose := file.Close(); errClose != nil {
+				log.WithError(errClose).Warn("failed to close bounded log part file")
+			}
+			break
+		}
+		if wrote {
+			_ = out.WriteByte('\n')
+		}
+		_ = out.WriteByte(firstByte[0])
+		remaining = maxBytes - out.Len()
+		if remaining > 0 {
+			_, errCopy := io.CopyN(&out, file, int64(remaining))
+			if errCopy != nil && errCopy != io.EOF {
+				if errClose := file.Close(); errClose != nil {
+					log.WithError(errClose).Warn("failed to close bounded log part file")
+				}
+				return nil, false, errCopy
+			}
+		}
+
+		var probe [1]byte
+		probeCount, errProbe := file.Read(probe[:])
+		if errProbe != nil && errProbe != io.EOF {
+			if errClose := file.Close(); errClose != nil {
+				log.WithError(errClose).Warn("failed to close bounded log part file")
+			}
+			return nil, false, errProbe
+		}
+		if probeCount > 0 || (out.Len() >= maxBytes && hasMoreParts) {
+			truncated = true
+		}
+		if errClose := file.Close(); errClose != nil {
+			return nil, false, errClose
+		}
+		wrote = true
+		if truncated {
+			break
+		}
+	}
+
+	s.mu.Lock()
+	if !s.cleaned && len(s.paths) > maxParts {
+		truncated = true
+	}
+	s.mu.Unlock()
+	return out.Bytes(), truncated, nil
+}
+
 // WriteTo merges all ordered parts into w.
 func (s *FileBodySource) WriteTo(w io.Writer) error {
 	if s == nil || w == nil {
 		return nil
 	}
-	paths := s.Paths()
 	wrote := false
-	for _, path := range paths {
+	for index := 0; ; index++ {
+		s.mu.Lock()
+		if s.cleaned || index >= len(s.paths) {
+			s.mu.Unlock()
+			break
+		}
+		path := s.paths[index]
+		s.mu.Unlock()
+
 		file, errOpen := os.Open(path)
 		if errOpen != nil {
 			if os.IsNotExist(errOpen) {
@@ -223,25 +340,15 @@ func (s *FileBodySource) Cleanup() error {
 		s.mu.Unlock()
 		return nil
 	}
-	paths := make([]string, len(s.paths))
-	copy(paths, s.paths)
 	dir := s.dir
 	s.paths = nil
 	s.cleaned = true
 	s.mu.Unlock()
 
-	var firstErr error
-	for _, path := range paths {
-		if errRemove := os.Remove(path); errRemove != nil && !os.IsNotExist(errRemove) && firstErr == nil {
-			firstErr = errRemove
-		}
+	if dir == "" {
+		return nil
 	}
-	if dir != "" {
-		if errRemove := os.RemoveAll(dir); errRemove != nil && firstErr == nil {
-			firstErr = errRemove
-		}
-	}
-	return firstErr
+	return os.RemoveAll(dir)
 }
 
 func cleanupFileBodySources(sources ...*FileBodySource) {
