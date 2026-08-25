@@ -125,6 +125,30 @@ func TestSyncHomePluginsSkipsFetchWhenPluginsDisabled(t *testing.T) {
 	}
 }
 
+func TestHomePluginDeleteTasksSkipFetchAndDeleteWhenPluginsDisabled(t *testing.T) {
+	t.Setenv("CLIPROXY_DISABLE_PLUGINS", "true")
+	cfg := &config.Config{}
+	cfg.Home.Enabled = true
+	deleteCalls := 0
+	service := &Service{homePluginDeleteTask: func(context.Context, *config.Config, home.PluginTask) homeplugins.SyncReport {
+		deleteCalls++
+		return homeplugins.CompletedSyncReport(homeplugins.CurrentPlatform(), nil)
+	}}
+	client, _ := newHomePluginTaskTestClient(t, nil, 0)
+
+	service.processHomePluginTasksWithClient(context.Background(), cfg, client)
+	if deleteCalls != 0 {
+		t.Fatalf("disabled task processing deleteCalls=%d, want zero", deleteCalls)
+	}
+	if _, errStage := service.stageHomePluginTasksWithClient(context.Background(), cfg, client); !errors.Is(errStage, sdkpluginstore.ErrPluginsDisabled) {
+		t.Fatalf("stageHomePluginTasksWithClient() error = %v, want ErrPluginsDisabled", errStage)
+	}
+	report := service.processHomePluginDeleteTask(context.Background(), cfg, home.PluginTask{ID: 1, Operation: "delete", PluginID: "plugin-a"})
+	if report.OK || deleteCalls != 0 {
+		t.Fatalf("disabled delete report=%#v deleteCalls=%d, want rejected without callback", report, deleteCalls)
+	}
+}
+
 func TestSyncHomePluginsSkipsDisabledReportWhenUnchanged(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Home.Enabled = true

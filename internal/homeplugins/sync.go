@@ -400,6 +400,13 @@ func DeleteWithReport(ctx context.Context, cfg *config.Config, pluginRuntime Plu
 	report.Phase = pluginTaskPhaseDelete
 	pluginID = strings.TrimSpace(pluginID)
 	status := PluginInstallStatus{ID: pluginID}
+	if config.PluginsDisabledByPolicy() {
+		status.InstallStatus = pluginInstallStatusFailed
+		status.Error = pluginpolicy.ErrDisabled.Error()
+		report.Plugins = append(report.Plugins, status)
+		finishReport(&report, pluginpolicy.ErrDisabled)
+		return report
+	}
 	if errContext := ctx.Err(); errContext != nil {
 		status.InstallStatus = pluginInstallStatusFailed
 		status.Error = errContext.Error()

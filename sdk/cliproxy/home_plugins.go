@@ -169,6 +169,9 @@ func (s *Service) processHomePluginTasks(ctx context.Context, cfg *config.Config
 }
 
 func (s *Service) processHomePluginTasksWithClient(ctx context.Context, cfg *config.Config, client *home.Client) {
+	if config.PluginsDisabledByPolicy() {
+		return
+	}
 	tasks, errStage := s.stageHomePluginTasksWithClient(ctx, cfg, client)
 	if errStage != nil {
 		log.Warnf("failed to fetch home plugin tasks: %v", errStage)
@@ -181,6 +184,9 @@ func (s *Service) processHomePluginTasksWithClient(ctx context.Context, cfg *con
 }
 
 func (s *Service) stageHomePluginTasksWithClient(ctx context.Context, cfg *config.Config, client *home.Client) ([]homePluginTaskWork, error) {
+	if config.PluginsDisabledByPolicy() {
+		return nil, pluginpolicy.ErrDisabled
+	}
 	if s == nil || cfg == nil || !cfg.Home.Enabled {
 		return nil, nil
 	}
@@ -252,6 +258,9 @@ func (s *Service) finalizeHomePluginWork(ctx context.Context, client *home.Clien
 }
 
 func (s *Service) processHomePluginDeleteTask(ctx context.Context, cfg *config.Config, task home.PluginTask) homeplugins.SyncReport {
+	if config.PluginsDisabledByPolicy() {
+		return homeplugins.CompletedSyncReport(homeplugins.CurrentPlatform(), pluginpolicy.ErrDisabled)
+	}
 	if s != nil && s.homePluginDeleteTask != nil {
 		return s.homePluginDeleteTask(ctx, cfg, task)
 	}

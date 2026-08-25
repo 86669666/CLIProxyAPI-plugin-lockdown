@@ -193,6 +193,10 @@ func TestSyncEntrypointsPolicyAvoidsFetchAndInstall(t *testing.T) {
 	if clientCalls != 0 {
 		t.Fatalf("plugin store client calls = %d, want 0 under policy", clientCalls)
 	}
+	report := DeleteWithReport(context.Background(), cfg, nil, 1, "sample")
+	if report.OK || !strings.Contains(report.Error, sdkpluginstore.ErrPluginsDisabled.Error()) {
+		t.Fatalf("DeleteWithReport() = %#v, want policy rejection", report)
+	}
 }
 
 func TestSyncResolvedWithReportIncludesUnchangedInstalledPlugins(t *testing.T) {
