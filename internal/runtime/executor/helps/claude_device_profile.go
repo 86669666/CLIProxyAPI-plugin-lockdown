@@ -616,8 +616,11 @@ func ApplyClaudeLegacyDeviceHeaders(r *http.Request, ginHeaders http.Header, cfg
 	if confirmedClaudeCode {
 		miscEnsure("X-Stainless-Runtime-Version", profile.RuntimeVersion, func(value string) bool { return value == profile.RuntimeVersion })
 		miscEnsure("X-Stainless-Package-Version", profile.PackageVersion, func(value string) bool { return value == profile.PackageVersion })
-		miscEnsure("X-Stainless-Os", mapStainlessOS(), nil)
-		miscEnsure("X-Stainless-Arch", mapStainlessArch(), nil)
+		// The baseline is a coherent measured client profile. Keep its configured
+		// platform instead of combining a macOS/arm64 baseline with the proxy host's
+		// Linux/x64 runtime, which produces an impossible wire fingerprint.
+		miscEnsure("X-Stainless-Os", profile.OS, func(value string) bool { return value == profile.OS })
+		miscEnsure("X-Stainless-Arch", profile.Arch, func(value string) bool { return value == profile.Arch })
 		if clientUA := strings.TrimSpace(ginHeaders.Get("User-Agent")); plausibleClaudeCodeUserAgent(clientUA, cfg) {
 			r.Header.Set("User-Agent", clientUA)
 			return
