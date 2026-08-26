@@ -195,11 +195,6 @@ jobs:
           else
             tar -C "$archive_dir" -czf "dist/$archive_name" "$binary_name" LICENSE README.md README_CN.md config.example.yaml
           fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: dist/CLIProxyAPI_*
-          if-no-files-found: error
       - name: Upload release assets
         shell: bash
         env:
@@ -331,11 +326,6 @@ jobs:
 
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
           tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: dist/CLIProxyAPI_*
-          if-no-files-found: error
       - name: Upload release assets
         shell: bash
         env:
@@ -450,11 +440,6 @@ jobs:
 
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
           tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: dist/CLIProxyAPI_*
-          if-no-files-found: error
       - name: Upload release assets
         shell: bash
         env:
@@ -604,11 +589,6 @@ jobs:
           cp "dist/${TARGET}/bin/cli-proxy-api" "$archive_dir/cli-proxy-api"
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
           tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: dist/CLIProxyAPI_*
-          if-no-files-found: error
       - name: Upload release assets
         shell: bash
         env:
@@ -652,31 +632,3 @@ jobs:
             fi
           )
           gh release upload "$GITHUB_REF_NAME" "$tmp_dir/checksums.txt" --clobber
-
-  publish-checksums:
-    runs-on: ubuntu-latest
-    if: always()
-    needs:
-      - build-hosted
-      - build-linux-glibc
-      - build-linux-no-plugin
-      - build-freebsd
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Publish final checksums
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          cd dist
-          shopt -s nullglob
-          archives=(CLIProxyAPI_*.tar.gz CLIProxyAPI_*.zip)
-          if [[ ${#archives[@]} -eq 0 ]]; then
-            echo "No release archives found"
-            exit 0
-          fi
-          sha256sum "${archives[@]}" | sort -k2 > checksums.txt
-          gh release upload "$GITHUB_REF_NAME" checksums.txt --clobber
