@@ -1454,6 +1454,12 @@ func corruptGitRepository(t *testing.T, repoDir string) *git.Repository {
 	if errRepack := repo.RepackObjects(&git.RepackConfig{}); errRepack != nil {
 		t.Fatalf("repack repository objects: %v", errRepack)
 	}
+	// Reopen after repacking so newer go-git versions cannot satisfy object reads
+	// from the in-memory cache populated before the packfiles are removed.
+	repo, errOpen = git.PlainOpen(repoDir)
+	if errOpen != nil {
+		t.Fatalf("reopen repository after repack: %v", errOpen)
+	}
 	objectsDir := filepath.Join(repoDir, ".git", "objects")
 	objectEntries, errReadDir := os.ReadDir(objectsDir)
 	if errReadDir != nil {
@@ -1477,6 +1483,10 @@ func corruptGitRepository(t *testing.T, repoDir string) *git.Repository {
 		if errRemove := os.Remove(packfile); errRemove != nil {
 			t.Fatalf("remove packfile %s: %v", filepath.Base(packfile), errRemove)
 		}
+	}
+	repo, errOpen = git.PlainOpen(repoDir)
+	if errOpen != nil {
+		t.Fatalf("reopen corrupted repository: %v", errOpen)
 	}
 	return repo
 }
