@@ -276,8 +276,8 @@ func (s *FileBodySource) ReadBounded(maxParts int, maxBytes int) ([]byte, bool, 
 	return out.Bytes(), truncated, nil
 }
 
-// WriteTo merges all ordered parts into w.
-func (s *FileBodySource) WriteTo(w io.Writer) error {
+// WriteBodyTo merges all ordered parts into w.
+func (s *FileBodySource) WriteBodyTo(w io.Writer) error {
 	if s == nil || w == nil {
 		return nil
 	}
@@ -324,7 +324,7 @@ func (s *FileBodySource) WriteTo(w io.Writer) error {
 // Bytes merges all ordered parts into memory.
 func (s *FileBodySource) Bytes() ([]byte, error) {
 	var buf bytes.Buffer
-	if errWrite := s.WriteTo(&buf); errWrite != nil {
+	if errWrite := s.WriteBodyTo(&buf); errWrite != nil {
 		return nil, errWrite
 	}
 	return buf.Bytes(), nil
