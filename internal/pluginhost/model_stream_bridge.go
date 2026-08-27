@@ -22,6 +22,10 @@ type modelStreamEntry struct {
 	cancel          context.CancelFunc
 }
 
+func newHostModelStreamContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithCancel(parent)
+}
+
 func newModelStreamBridge() *modelStreamBridge {
 	return &modelStreamBridge{streams: make(map[string]modelStreamEntry)}
 }

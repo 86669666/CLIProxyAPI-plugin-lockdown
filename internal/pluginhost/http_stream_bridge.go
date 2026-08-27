@@ -21,6 +21,10 @@ type hostHTTPStreamEntry struct {
 	cancel context.CancelFunc
 }
 
+func newHostHTTPStreamContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithCancel(parent)
+}
+
 func newHostHTTPStreamBridge() *hostHTTPStreamBridge {
 	return &hostHTTPStreamBridge{streams: make(map[string]hostHTTPStreamEntry)}
 }
