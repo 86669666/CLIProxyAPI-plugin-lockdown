@@ -33,13 +33,20 @@ func TestLoadDotEnvBeforePluginBootstrap(t *testing.T) {
 	}
 }
 
-func TestComposeFilesForcePluginLockdown(t *testing.T) {
-	for _, name := range []string{"docker-compose.yml", "docker-compose.cluster.yml"} {
+func TestDistributedContainerFilesForcePluginLockdown(t *testing.T) {
+	for _, name := range []string{"docker-compose.yml", "docker-compose.cluster.yml", "Dockerfile"} {
 		raw, errRead := os.ReadFile(filepath.Join("..", "..", name))
 		if errRead != nil {
 			t.Fatalf("ReadFile(%s) error = %v", name, errRead)
 		}
-		if !strings.Contains(string(raw), "CLIPROXY_DISABLE_PLUGINS: \"true\"") {
+		contents := string(raw)
+		if name == "Dockerfile" {
+			if !strings.Contains(contents, "CLIPROXY_DISABLE_PLUGINS=true") {
+				t.Fatalf("%s does not force CLIPROXY_DISABLE_PLUGINS=true", name)
+			}
+			continue
+		}
+		if !strings.Contains(contents, "CLIPROXY_DISABLE_PLUGINS: \"true\"") {
 			t.Fatalf("%s does not force CLIPROXY_DISABLE_PLUGINS to true", name)
 		}
 	}
@@ -170,6 +177,51 @@ func TestModelCatalogUpdaterPlan(t *testing.T) {
 			if gotModels != tt.wantModels || gotCodex != tt.wantCodexClient {
 				t.Fatalf("modelCatalogUpdaterPlan(%v, %v) = (%v, %v), want (%v, %v)",
 					tt.localModel, tt.homeEnabled, gotModels, gotCodex, tt.wantModels, tt.wantCodexClient)
+			}
+		})
+	}
+}
+
+func TestHomeConfigPayloadPortApplication(t *testing.T) {
+	tests := []struct {
+		name     string
+		yamlBody string
+		wantPort int
+	}{
+		{
+			name:     "custom port honored",
+			yamlBody: "port: 9090\n",
+			wantPort: 9090,
+		},
+		{
+			name:     "custom port 8327 honored",
+			yamlBody: "port: 8327\n",
+			wantPort: 8327,
+		},
+		{
+			name:     "missing port defaults to 8317",
+			yamlBody: "debug: true\n",
+			wantPort: 8317,
+		},
+		{
+			name:     "standard port 8317 preserved",
+			yamlBody: "port: 8317\n",
+			wantPort: 8317,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed, errParse := config.ParseConfigBytes([]byte(tt.yamlBody))
+			if errParse != nil {
+				t.Fatalf("ParseConfigBytes() error = %v", errParse)
+			}
+			if parsed == nil {
+				parsed = &config.Config{}
+			}
+			parsed.Port = config.NormalizeHomePort(parsed.Port)
+			if parsed.Port != tt.wantPort {
+				t.Fatalf("parsed.Port = %d, want %d", parsed.Port, tt.wantPort)
 			}
 		})
 	}
