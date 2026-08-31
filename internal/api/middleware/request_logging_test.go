@@ -10,11 +10,13 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 )
@@ -92,14 +94,14 @@ func TestShouldCaptureRequestBody(t *testing.T) {
 		want          bool
 	}{
 		{
-			name:          "logger enabled always captures",
+			name:          "logger enabled defers unknown size",
 			loggerEnabled: true,
 			req: &http.Request{
 				Body:          io.NopCloser(strings.NewReader("{}")),
 				ContentLength: -1,
 				Header:        http.Header{"Content-Type": []string{"application/json"}},
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name:          "nil request",
@@ -342,6 +344,45 @@ func TestDecodeCapturedRequestBodyForLogWithLimitTruncatesZstdExpansion(t *testi
 	}
 }
 
+func TestDecodeCapturedZstdRequestBodyWithLimitRejectsLargeWindow(t *testing.T) {
+	payload := []byte("small payload")
+	var compressed bytes.Buffer
+	encoder, errNewWriter := zstd.NewWriter(&compressed, zstd.WithEncoderConcurrency(1))
+	if errNewWriter != nil {
+		t.Fatalf("zstd.NewWriter: %v", errNewWriter)
+	}
+	if _, errWrite := encoder.Write(payload); errWrite != nil {
+		t.Fatalf("zstd write: %v", errWrite)
+	}
+	if errClose := encoder.Close(); errClose != nil {
+		t.Fatalf("zstd close: %v", errClose)
+	}
+
+	highWindowFrame := bytes.Clone(compressed.Bytes())
+	if len(highWindowFrame) < 6 || highWindowFrame[4]&0x20 != 0 {
+		t.Fatalf("unexpected zstd frame header: %x", highWindowFrame)
+	}
+	const sixtyFourMiBWindowDescriptor byte = 0x80
+	highWindowFrame[5] = sixtyFourMiBWindowDescriptor
+
+	decoder, errNewReader := zstd.NewReader(bytes.NewReader(highWindowFrame))
+	if errNewReader != nil {
+		t.Fatalf("create unrestricted zstd decoder: %v", errNewReader)
+	}
+	decoded, errRead := io.ReadAll(decoder)
+	decoder.Close()
+	if errRead != nil {
+		t.Fatalf("decode valid high-window frame: %v", errRead)
+	}
+	if !bytes.Equal(decoded, payload) {
+		t.Fatalf("decoded high-window payload = %q, want %q", decoded, payload)
+	}
+
+	if _, _, errDecode := decodeCapturedZstdRequestBodyWithLimit(highWindowFrame, maxDeferredErrorRequestBodyBytes); errDecode == nil {
+		t.Fatal("high-window zstd frame was accepted")
+	}
+}
+
 func TestCaptureRequestInfoDecodesZstdRequestBodyForLog(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -504,4 +545,143 @@ func TestRequestLoggingMiddleware_ClientCancellationExclusion(t *testing.T) {
 			t.Fatalf("expected 1 standard request log file when request-log=true, got %d", standardLogCount)
 		}
 	})
+}
+
+type boundedCaptureLogger struct {
+	enabled      bool
+	tempDir      string
+	requestBody  []byte
+	responseBody []byte
+}
+
+func (l *boundedCaptureLogger) LogRequest(_ string, _ string, _ map[string][]string, body []byte, _ int, _ map[string][]string, response []byte, _ []byte, _ []byte, _ []byte, _ []byte, _ []*interfaces.ErrorMessage, _ string, _ time.Time, _ time.Time) error {
+	l.requestBody = body
+	l.responseBody = response
+	return nil
+}
+
+func (l *boundedCaptureLogger) LogStreamingRequest(string, string, map[string][]string, []byte, string) (logging.StreamingLogWriter, error) {
+	return &testStreamingLogWriter{}, nil
+}
+
+func (l *boundedCaptureLogger) IsEnabled() bool {
+	return l.enabled
+}
+
+func (l *boundedCaptureLogger) NewFileBodySource(prefix string) (*logging.FileBodySource, error) {
+	return logging.NewFileBodySourceInDir(l.tempDir, prefix)
+}
+
+type constantByteReader struct {
+	value     byte
+	remaining int64
+}
+
+func (r *constantByteReader) Read(payload []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	if int64(len(payload)) > r.remaining {
+		payload = payload[:r.remaining]
+	}
+	for index := range payload {
+		payload[index] = r.value
+	}
+	r.remaining -= int64(len(payload))
+	return len(payload), nil
+}
+
+func TestRequestLoggingMiddleware_EnabledLargeChunkedBodyIsBounded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	bodySize := maxDeferredErrorRequestBodyBytes + 4096
+	logger := &boundedCaptureLogger{enabled: true, tempDir: t.TempDir()}
+	var consumed int64
+
+	router := gin.New()
+	router.Use(RequestLoggingMiddleware(logger))
+	router.POST("/v1/responses", func(c *gin.Context) {
+		var errCopy error
+		consumed, errCopy = io.Copy(io.Discard, c.Request.Body)
+		if errCopy != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", &constantByteReader{value: 'x', remaining: bodySize})
+	req.ContentLength = -1
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusNoContent)
+	}
+	if consumed != bodySize {
+		t.Fatalf("handler consumed %d bytes, want %d", consumed, bodySize)
+	}
+	marker := "\n[REQUEST BODY TRUNCATED: captured first 33554432 bytes]"
+	if len(logger.requestBody) != int(maxDeferredErrorRequestBodyBytes)+len(marker) {
+		t.Fatalf("logged request body length = %d, want %d", len(logger.requestBody), int(maxDeferredErrorRequestBodyBytes)+len(marker))
+	}
+	if !bytes.Equal(logger.requestBody[:64], bytes.Repeat([]byte{'x'}, 64)) {
+		t.Fatal("logged request body did not retain the expected prefix")
+	}
+	if !bytes.HasSuffix(logger.requestBody, []byte(marker)) {
+		t.Fatalf("logged request body missing deterministic truncation marker: %q", logger.requestBody[len(logger.requestBody)-len(marker):])
+	}
+}
+
+func TestRequestLoggingMiddleware_ZstdDecompressionIsBounded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var compressed bytes.Buffer
+	encoder, errNewWriter := zstd.NewWriter(&compressed)
+	if errNewWriter != nil {
+		t.Fatalf("zstd.NewWriter: %v", errNewWriter)
+	}
+	decompressedSize := maxDeferredErrorRequestBodyBytes + 4096
+	if _, errCopy := io.Copy(encoder, &constantByteReader{value: 'z', remaining: decompressedSize}); errCopy != nil {
+		t.Fatalf("compress request body: %v", errCopy)
+	}
+	if errClose := encoder.Close(); errClose != nil {
+		t.Fatalf("close zstd encoder: %v", errClose)
+	}
+	compressedBody := bytes.Clone(compressed.Bytes())
+
+	logger := &boundedCaptureLogger{enabled: true, tempDir: t.TempDir()}
+	var received []byte
+	router := gin.New()
+	router.Use(RequestLoggingMiddleware(logger))
+	router.POST("/v1/responses", func(c *gin.Context) {
+		var errRead error
+		received, errRead = io.ReadAll(c.Request.Body)
+		if errRead != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressedBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "zstd")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if !bytes.Equal(received, compressedBody) {
+		t.Fatal("handler did not receive the complete original compressed request body")
+	}
+	marker := "\n[DECOMPRESSED REQUEST BODY TRUNCATED]"
+	if len(logger.requestBody) != int(maxDeferredErrorRequestBodyBytes)+len(marker) {
+		t.Fatalf("logged decompressed body length = %d, want %d", len(logger.requestBody), int(maxDeferredErrorRequestBodyBytes)+len(marker))
+	}
+	if !bytes.Equal(logger.requestBody[:64], bytes.Repeat([]byte{'z'}, 64)) {
+		t.Fatal("logged decompressed body did not retain the expected prefix")
+	}
+	if !bytes.HasSuffix(logger.requestBody, []byte(marker)) {
+		t.Fatalf("logged decompressed body missing truncation marker: %q", logger.requestBody[len(logger.requestBody)-len(marker):])
+	}
 }

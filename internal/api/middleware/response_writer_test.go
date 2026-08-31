@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -376,5 +377,55 @@ func TestFinalizeIncludes500InForceLog(t *testing.T) {
 	}
 	if len(logger.loggedCalls) != 1 || logger.loggedCalls[0] != http.StatusInternalServerError {
 		t.Fatalf("expected 1 logged call for 500 status, got: %v", logger.loggedCalls)
+	}
+}
+
+func TestRequestLoggingMiddleware_LargeNonStreamingResponseIsBounded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	logger := &boundedCaptureLogger{enabled: true, tempDir: t.TempDir()}
+	responseSize := maxCapturedResponseBodyBytes + 4096
+	chunk := bytes.Repeat([]byte{'r'}, 64<<10)
+
+	router := gin.New()
+	router.Use(RequestLoggingMiddleware(logger))
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.Header("Content-Type", "application/json")
+		remaining := responseSize
+		for remaining > 0 {
+			writeLength := len(chunk)
+			if writeLength > remaining {
+				writeLength = remaining
+			}
+			if _, errWrite := c.Writer.Write(chunk[:writeLength]); errWrite != nil {
+				return
+			}
+			remaining -= writeLength
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
+	}
+	if resp.Body.Len() != responseSize {
+		t.Fatalf("client response length = %d, want %d", resp.Body.Len(), responseSize)
+	}
+	if !bytes.Equal(resp.Body.Bytes()[:64], bytes.Repeat([]byte{'r'}, 64)) || !bytes.Equal(resp.Body.Bytes()[responseSize-64:], bytes.Repeat([]byte{'r'}, 64)) {
+		t.Fatal("client response was not written completely")
+	}
+	marker := "\n" + responseBodyTruncationMarker
+	if len(logger.responseBody) != maxCapturedResponseBodyBytes+len(marker) {
+		t.Fatalf("logged response length = %d, want %d", len(logger.responseBody), maxCapturedResponseBodyBytes+len(marker))
+	}
+	if !bytes.Equal(logger.responseBody[:64], bytes.Repeat([]byte{'r'}, 64)) {
+		t.Fatal("logged response did not retain the expected prefix")
+	}
+	if !bytes.HasSuffix(logger.responseBody, []byte(marker)) {
+		t.Fatalf("logged response missing truncation marker: %q", logger.responseBody[len(logger.responseBody)-len(marker):])
 	}
 }

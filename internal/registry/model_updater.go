@@ -297,16 +297,32 @@ func mergeProviderNames(existing, incoming []string) []string {
 
 func loadModelsFromBytes(data []byte, source string) error {
 	var parsed staticModelsJSON
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return fmt.Errorf("%s: decode models catalog: %w", source, err)
-	}
-	if err := validateModelsCatalog(&parsed); err != nil {
-		return fmt.Errorf("%s: validate models catalog: %w", source, err)
+	if err := validateModelsJSON(data, &parsed); err != nil {
+		return fmt.Errorf("%s: %w", source, err)
 	}
 
 	modelsCatalogStore.mu.Lock()
 	modelsCatalogStore.data = &parsed
 	modelsCatalogStore.mu.Unlock()
+	return nil
+}
+
+// ValidateModelsJSON validates an embedded models catalog without installing it.
+func ValidateModelsJSON(data []byte) error {
+	return validateModelsJSON(data, nil)
+}
+
+func validateModelsJSON(data []byte, destination *staticModelsJSON) error {
+	var parsed staticModelsJSON
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return fmt.Errorf("decode models catalog: %w", err)
+	}
+	if err := validateModelsCatalog(&parsed); err != nil {
+		return fmt.Errorf("validate models catalog: %w", err)
+	}
+	if destination != nil {
+		*destination = parsed
+	}
 	return nil
 }
 

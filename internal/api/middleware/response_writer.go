@@ -22,6 +22,10 @@ const requestBodyOverrideContextKey = "REQUEST_BODY_OVERRIDE"
 const responseBodyOverrideContextKey = "RESPONSE_BODY_OVERRIDE"
 const websocketTimelineOverrideContextKey = "WEBSOCKET_TIMELINE_OVERRIDE"
 
+const maxCapturedResponseBodyBytes = 32 << 20
+
+const responseBodyTruncationMarker = "[RESPONSE BODY TRUNCATED: captured first 33554432 bytes]"
+
 // RequestInfo holds essential details of an incoming HTTP request for logging purposes.
 type RequestInfo struct {
 	URL                 string                      // URL is the request URL.
@@ -30,7 +34,7 @@ type RequestInfo struct {
 	Body                []byte                      // Body is the raw request body.
 	RequestID           string                      // RequestID is the unique identifier for the request.
 	Timestamp           time.Time                   // Timestamp is when the request was received.
-	deferredBodyCapture *deferredRequestBodyCapture // deferredBodyCapture spools large error-only request bodies.
+	deferredBodyCapture *deferredRequestBodyCapture // deferredBodyCapture spools large request bodies.
 }
 
 // ResponseWriterWrapper wraps the standard gin.ResponseWriter to intercept and log response data.
@@ -48,6 +52,7 @@ type ResponseWriterWrapper struct {
 	headers             map[string][]string        // headers stores the response headers.
 	logOnErrorOnly      bool                       // logOnErrorOnly enables logging only when an error response is detected.
 	firstChunkTimestamp time.Time                  // firstChunkTimestamp captures TTFB for streaming responses.
+	bodyTruncated       bool
 }
 
 // NewResponseWriterWrapper creates and initializes a new ResponseWriterWrapper.
@@ -98,7 +103,7 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 	}
 
 	if w.shouldBufferResponseBody() {
-		w.body.Write(data)
+		w.captureResponseBody(data[:n])
 	}
 
 	return n, err
@@ -145,9 +150,41 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 	}
 
 	if w.shouldBufferResponseBody() {
-		w.body.WriteString(data)
+		w.captureResponseString(data[:n])
 	}
 	return n, err
+}
+
+func (w *ResponseWriterWrapper) captureResponseBody(data []byte) {
+	if w.body == nil || len(data) == 0 {
+		return
+	}
+	remaining := maxCapturedResponseBodyBytes - w.body.Len()
+	if remaining <= 0 {
+		w.bodyTruncated = true
+		return
+	}
+	if len(data) > remaining {
+		data = data[:remaining]
+		w.bodyTruncated = true
+	}
+	_, _ = w.body.Write(data)
+}
+
+func (w *ResponseWriterWrapper) captureResponseString(data string) {
+	if w.body == nil || len(data) == 0 {
+		return
+	}
+	remaining := maxCapturedResponseBodyBytes - w.body.Len()
+	if remaining <= 0 {
+		w.bodyTruncated = true
+		return
+	}
+	if len(data) > remaining {
+		data = data[:remaining]
+		w.bodyTruncated = true
+	}
+	_, _ = w.body.WriteString(data)
 }
 
 // WriteHeader wraps the underlying ResponseWriter's WriteHeader method.
@@ -169,7 +206,7 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 			w.requestInfo.URL,
 			w.requestInfo.Method,
 			w.requestInfo.Headers,
-			w.requestInfo.Body,
+			w.capturedRequestBody(),
 			w.requestInfo.RequestID,
 		)
 		if err == nil {
@@ -473,6 +510,10 @@ func (w *ResponseWriterWrapper) extractRequestBody(c *gin.Context) []byte {
 	if body := extractBodyOverride(c, requestBodyOverrideContextKey); len(body) > 0 {
 		return body
 	}
+	return w.capturedRequestBody()
+}
+
+func (w *ResponseWriterWrapper) capturedRequestBody() []byte {
 	if w.requestInfo == nil {
 		return nil
 	}
@@ -511,7 +552,14 @@ func (w *ResponseWriterWrapper) extractResponseBody(c *gin.Context) []byte {
 	if w.body == nil || w.body.Len() == 0 {
 		return nil
 	}
-	return bytes.Clone(w.body.Bytes())
+	body := bytes.Clone(w.body.Bytes())
+	if !w.bodyTruncated {
+		return body
+	}
+	if len(body) > 0 && !bytes.HasSuffix(body, []byte("\n")) {
+		body = append(body, '\n')
+	}
+	return append(body, responseBodyTruncationMarker...)
 }
 
 func (w *ResponseWriterWrapper) extractWebsocketTimeline(c *gin.Context) []byte {

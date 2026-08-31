@@ -33,7 +33,9 @@ jobs:
             echo "Release $GITHUB_REF_NAME already exists; refusing to replace immutable assets." >&2
             exit 1
           fi
-      - name: Refresh models catalog
+      - name: Test release provenance scripts
+        run: bash .github/scripts/release-provenance-test.sh
+      - name: Refresh pinned models catalog
         run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Run tests
         run: go test ./...
@@ -41,7 +43,9 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          commit="$(git rev-parse --short HEAD)"
+          source_commit="$(git rev-parse HEAD)"
+          commit="${source_commit:0:7}"
+          models_commit="$(tr -d '[:space:]' < .github/models.commit)"
           build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           mkdir -p dist
 
@@ -71,9 +75,7 @@ jobs:
               cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
           done
 
-          cd dist
-          sha256sum CLIProxyAPI_*.tar.gz | sort -k2 > checksums.txt
-          sha256sum -c checksums.txt
+          bash .github/scripts/write-release-provenance.sh dist "$source_commit" "$models_commit"
       - name: Create immutable release with verified assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -127,9 +129,11 @@ jobs:
 
           - `CLIProxyAPI_<version>_linux_<arch>_no-plugin.tar.gz` is the portable static Linux build.
           - Plugin capabilities are additionally disabled by the maintained fail-closed server policy; the build suffix alone is not the security boundary.
-          - `checksums.txt` contains SHA-256 checksums for every archive in this immutable Release.
+          - `checksums.txt` contains SHA-256 checksums for every archive and provenance file in this immutable Release.
 
           EOF
+            printf -- '- Source commit: `%s`\n' "$(cat dist/SOURCE_COMMIT)"
+            printf -- '- Pinned models commit: `%s`\n\n' "$(cat dist/MODELS_COMMIT)"
             if [[ -s "$changelog_entries_file" ]]; then
               printf '## Changelog\n\n'
               cat "$changelog_entries_file"
@@ -138,8 +142,8 @@ jobs:
             cat "$generated_notes_file"
           } > "$release_notes_file"
 
-          assets=(dist/CLIProxyAPI_*.tar.gz dist/checksums.txt)
-          [[ ${#assets[@]} -eq 3 ]]
+          assets=(dist/CLIProxyAPI_*.tar.gz dist/SOURCE_COMMIT dist/MODELS_COMMIT dist/checksums.txt)
+          [[ ${#assets[@]} -eq 5 ]]
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --title "$GITHUB_REF_NAME" \
             --notes-file "$release_notes_file" \
